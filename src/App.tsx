@@ -1697,11 +1697,19 @@ export default function App() {
 
               <div className="space-y-1.5">
                 <div className="font-bold text-zinc-950">
-                  3. Building & Deploying to Production
+                  3. Deploying from the <code className="font-mono text-blue-600">main</code> Branch (GitHub / Firebase / Vercel)
                 </div>
                 <p>
-                  Run <code className="font-mono bg-zinc-100 px-1.5 py-0.5 rounded">npm run build</code> to generate the optimized production bundle in <code className="font-mono">dist/</code>. Deploy to Firebase Hosting (<code className="font-mono">firebase deploy</code>) or Cloud Run.
+                  <code className="font-mono">firebase.json</code>, <code className="font-mono">.firebaserc</code>, <code className="font-mono">.github/workflows/deploy-main.yml</code>, এবং <code className="font-mono">vercel.json</code> ফাইলগুলো <code className="font-mono">main</code> ব্রাঞ্চের জন্য রেডি করা হয়েছে:
                 </p>
+                <pre className="bg-zinc-950 text-zinc-100 p-3 rounded-lg font-mono text-[11px] overflow-x-auto">
+{`git branch -M main
+git push -u origin main
+
+# Or deploy directly to Firebase Hosting (detabase-f6c7f):
+npm run build
+npx firebase-tools deploy --only hosting`}
+                </pre>
               </div>
             </div>
 
