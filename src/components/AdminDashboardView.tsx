@@ -11,6 +11,8 @@ import {
 } from '../types';
 import { CATEGORIES, PRODUCT_COLORS } from '../data/catalogData';
 import { ProductMockup } from './ProductMockup';
+import { auth } from '../firebase';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import {
   Download,
   Plus,
@@ -24,11 +26,14 @@ import {
   TrendingUp,
   Users,
   ShieldCheck,
+  Lock,
+  LogOut,
 } from 'lucide-react';
 
 interface AdminDashboardViewProps {
   currentUser: UserProfile | null;
-  onAdminQuickLogin: () => void;
+  onAdminLoginSuccess: (adminUser: UserProfile) => void;
+  onAdminLogout: () => void;
   products: Product[];
   onSaveProducts: (next: Product[]) => void;
   orders: Order[];
@@ -37,6 +42,31 @@ interface AdminDashboardViewProps {
   onSaveSampleDesigns: (next: SampleDesign[]) => void;
   settings: StoreSettings;
   onSaveSettings: (next: StoreSettings) => void;
+}
+
+const ADMIN_CREDS_STORAGE_KEY = 'pz_studio_admin_credentials_v1';
+
+interface AdminCredentials {
+  adminUserId: string;
+  adminPassword: string;
+}
+
+function getStoredAdminCredentials(): AdminCredentials {
+  try {
+    const raw = localStorage.getItem(ADMIN_CREDS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.adminUserId && parsed.adminPassword) {
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return {
+    adminUserId: 'tanmoydari4@gmail.com',
+    adminPassword: 'PrintZone@2026',
+  };
 }
 
 const ORDER_STATUSES: OrderStatus[] = [
@@ -52,7 +82,8 @@ const ORDER_STATUSES: OrderStatus[] = [
 
 export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   currentUser,
-  onAdminQuickLogin,
+  onAdminLoginSuccess,
+  onAdminLogout,
   products,
   onSaveProducts,
   orders,
@@ -70,6 +101,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [showNewProductForm, setShowNewProductForm] = useState<boolean>(false);
   const [settingsSavedMsg, setSettingsSavedMsg] = useState<boolean>(false);
 
+  // Admin Login Gate State
+  const [loginUserId, setLoginUserId] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [verifyingAdmin, setVerifyingAdmin] = useState(false);
+
+  // Admin Credentials Update State (in Settings tab)
+  const [adminCreds, setAdminCreds] = useState<AdminCredentials>(() =>
+    getStoredAdminCredentials()
+  );
+
   // New Product Form State
   const [newProdName, setNewProdName] = useState('');
   const [newProdCat, setNewProdCat] = useState<CategoryId>('apparel');
@@ -86,24 +128,134 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [newSampleText, setNewSampleText] = useState('LIMITED EDITION');
   const [newSamplePrice, setNewSamplePrice] = useState(349);
 
+  const handleAdminGateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    const enteredId = loginUserId.trim().toLowerCase();
+    const enteredPass = loginPassword;
+
+    if (!enteredId || !enteredPass) {
+      setLoginError('Please enter both Admin User ID and Password.');
+      return;
+    }
+
+    setVerifyingAdmin(true);
+    const savedCreds = getStoredAdminCredentials();
+    const isValidStoredAdmin =
+      (enteredId === savedCreds.adminUserId.toLowerCase() ||
+        enteredId === 'tanmoydari4@gmail.com' ||
+        enteredId === 'admin@printzonestudio.in' ||
+        enteredId === 'admin') &&
+      enteredPass === savedCreds.adminPassword;
+
+    if (isValidStoredAdmin) {
+      setVerifyingAdmin(false);
+      onAdminLoginSuccess({
+        uid: 'admin-printzone-studio',
+        name: 'Tanmoy Dari (Studio Admin)',
+        email: enteredId.includes('@') ? enteredId : savedCreds.adminUserId,
+        phone: settings.supportPhone.replace(/\D/g, '').slice(-10) || '9830012345',
+        role: 'admin',
+        savedAddresses: [],
+        savedDesigns: [],
+      });
+      return;
+    }
+
+    // Also allow Firebase Auth if the admin signs in with their Firebase account password
+    if (
+      auth &&
+      (enteredId === 'tanmoydari4@gmail.com' ||
+        enteredId === 'admin@printzonestudio.in' ||
+        enteredId === savedCreds.adminUserId.toLowerCase())
+    ) {
+      try {
+        const cred = await signInWithEmailAndPassword(auth, enteredId, enteredPass);
+        setVerifyingAdmin(false);
+        onAdminLoginSuccess({
+          uid: cred.user.uid,
+          name: cred.user.displayName || 'Tanmoy Dari (Studio Admin)',
+          email: cred.user.email || enteredId,
+          phone: '9830012345',
+          role: 'admin',
+          savedAddresses: [],
+          savedDesigns: [],
+        });
+        return;
+      } catch {
+        // Invalid credentials
+      }
+    }
+
+    setVerifyingAdmin(false);
+    setLoginError(
+      'Invalid Admin User ID or Password. Please verify your administrator credentials.'
+    );
+  };
+
   if (!currentUser || currentUser.role !== 'admin') {
     return (
-      <div className="max-w-xl mx-auto px-4 py-16 text-center">
-        <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-8 space-y-4">
-          <ShieldCheck className="w-10 h-10 text-blue-600 mx-auto" />
-          <h1 className="text-2xl font-display font-bold text-zinc-950">
-            Admin Studio Access Required
-          </h1>
-          <p className="text-sm text-zinc-600">
-            Only authenticated PrintZone administrators can manage product pricing, download customer print files, or update order production statuses.
-          </p>
-          <button
-            type="button"
-            onClick={onAdminQuickLogin}
-            className="px-5 py-2.5 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
-          >
-            Sign In as Demo Studio Admin (tanmoydari4@gmail.com)
-          </button>
+      <div className="max-w-md mx-auto px-4 py-14">
+        <div className="bg-white border border-zinc-200 rounded-2xl p-6 sm:p-8 space-y-5 shadow-xs">
+          <div className="text-center space-y-2">
+            <div className="w-11 h-11 rounded-xl bg-zinc-950 text-white flex items-center justify-center mx-auto">
+              <ShieldCheck className="w-6 h-6 text-blue-400" />
+            </div>
+            <div className="text-xs font-mono text-blue-600 uppercase">
+              Restricted Studio Portal
+            </div>
+            <h1 className="text-2xl font-display font-bold text-zinc-950">
+              Admin Panel Sign In
+            </h1>
+            <p className="text-xs text-zinc-500">
+              Enter your authorized Admin User ID and Password to access order production, pricing, and store settings.
+            </p>
+          </div>
+
+          <form onSubmit={handleAdminGateSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                Admin User ID / Email *
+              </label>
+              <input
+                type="text"
+                required
+                value={loginUserId}
+                onChange={(e) => setLoginUserId(e.target.value)}
+                placeholder="Enter Admin User ID or Email"
+                className="w-full px-3.5 py-2.5 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                Admin Password *
+              </label>
+              <input
+                type="password"
+                required
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="Enter Admin Password"
+                className="w-full px-3.5 py-2.5 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+              />
+            </div>
+
+            {loginError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 font-medium">
+                {loginError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={verifyingAdmin}
+              className="w-full py-3 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 disabled:opacity-60 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              {verifyingAdmin ? 'Verifying Credentials...' : 'Login to Admin Dashboard'}
+            </button>
+          </form>
         </div>
       </div>
     );
@@ -296,7 +448,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           </h1>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <button
             type="button"
             onClick={handleExportOrdersCsv}
@@ -304,6 +456,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
             Export Orders CSV
+          </button>
+          <button
+            type="button"
+            onClick={onAdminLogout}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Sign Out Admin
           </button>
         </div>
       </div>
@@ -991,16 +1151,58 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             </label>
           </div>
 
+          <div className="pt-4 border-t border-zinc-200 space-y-3">
+            <h4 className="text-xs font-bold text-zinc-950 uppercase font-mono">
+              Admin Login Credentials
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                  Admin User ID / Email
+                </label>
+                <input
+                  type="text"
+                  value={adminCreds.adminUserId}
+                  onChange={(e) =>
+                    setAdminCreds({ ...adminCreds, adminUserId: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                  Admin Password
+                </label>
+                <input
+                  type="text"
+                  value={adminCreds.adminPassword}
+                  onChange={(e) =>
+                    setAdminCreds({ ...adminCreds, adminPassword: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg font-mono"
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="pt-3 flex items-center gap-3">
             <button
               type="button"
               onClick={() => {
+                try {
+                  localStorage.setItem(
+                    ADMIN_CREDS_STORAGE_KEY,
+                    JSON.stringify(adminCreds)
+                  );
+                } catch {
+                  // ignore
+                }
                 setSettingsSavedMsg(true);
                 setTimeout(() => setSettingsSavedMsg(false), 2500);
               }}
               className="px-5 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
             >
-              Save Store Configuration
+              Save Store & Admin Configuration
             </button>
             {settingsSavedMsg && (
               <span className="text-xs font-medium text-emerald-700 flex items-center gap-1">

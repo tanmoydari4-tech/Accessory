@@ -177,28 +177,52 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
     setDesignTitle(`${found.name} Custom`);
   };
 
-  // Sync Konva Stage
+  // Sync Konva Stage with responsive mobile scaling & touch support
   useEffect(() => {
-    if (!stageContainerRef.current) return;
+    const container = stageContainerRef.current;
+    if (!container) return;
+
+    const LOGICAL_WIDTH = 280;
+    const LOGICAL_HEIGHT = 240;
 
     const stage = new Konva.Stage({
-      container: stageContainerRef.current,
-      width: 280,
-      height: 240,
+      container,
+      width: LOGICAL_WIDTH,
+      height: LOGICAL_HEIGHT,
     });
     const layer = new Konva.Layer();
     const tr = new Konva.Transformer({
-      anchorSize: 8,
-      anchorCornerRadius: 2,
+      anchorSize: 11,
+      anchorCornerRadius: 3,
       anchorStroke: '#2563EB',
       anchorFill: '#FFFFFF',
       borderStroke: '#2563EB',
       borderDash: [4, 4],
-      rotateAnchorOffset: 20,
-      padding: 4,
+      rotateAnchorOffset: 22,
+      padding: 6,
     });
     layer.add(tr);
     stage.add(layer);
+
+    const updateStageScale = () => {
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        const scaleX = rect.width / LOGICAL_WIDTH;
+        const scaleY = rect.height / LOGICAL_HEIGHT;
+        const scale = Math.min(scaleX, scaleY);
+        stage.width(LOGICAL_WIDTH * scale);
+        stage.height(LOGICAL_HEIGHT * scale);
+        stage.scale({ x: scale, y: scale });
+        stage.batchDraw();
+      }
+    };
+
+    updateStageScale();
+    const resizeObserver = new ResizeObserver(() => {
+      updateStageScale();
+    });
+    resizeObserver.observe(container);
 
     stage.on('click tap', (e) => {
       if (e.target === stage) {
@@ -213,6 +237,7 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
     trRef.current = tr;
 
     return () => {
+      resizeObserver.disconnect();
       stage.destroy();
     };
   }, []);
@@ -1095,7 +1120,7 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
         </div>
 
         {/* RIGHT COLUMN: Product Color, Size, Print Method & Live Pricing (3 cols) */}
-        <div className="lg:col-span-3 space-y-5 bg-white border border-zinc-200 rounded-xl p-5">
+        <div className="order-3 lg:col-span-3 space-y-5 bg-white border border-zinc-200 rounded-xl p-4 sm:p-5">
           <div>
             <label className="block text-xs font-semibold text-zinc-700 mb-1">
               Custom Design Name

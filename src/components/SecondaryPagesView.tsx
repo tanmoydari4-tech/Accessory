@@ -10,6 +10,13 @@ import {
   UserProfile,
 } from '../types';
 import { ProductMockup } from './ProductMockup';
+import { auth, db } from '../firebase';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+} from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import {
   Package,
   RefreshCw,
@@ -21,8 +28,7 @@ import {
   Building2,
   Sliders,
   LogOut,
-  Shield,
-  Database,
+  Lock,
 } from 'lucide-react';
 
 const TRACKING_STEPS: OrderStatus[] = [
@@ -338,12 +344,13 @@ export const OrderTrackingView: React.FC<{
   orders: Order[];
   onOpenWhatsAppModal: (msg: string) => void;
 }> = ({ orders, onOpenWhatsAppModal }) => {
-  const [queryOrderNo, setQueryOrderNo] = useState(orders[0]?.orderNumber || 'PZ-2026-84102');
-  const [searchedOrder, setSearchedOrder] = useState<Order | null>(orders[0] || null);
+  const [queryOrderNo, setQueryOrderNo] = useState('');
+  const [searchedOrder, setSearchedOrder] = useState<Order | null>(null);
   const [notFound, setNotFound] = useState(false);
 
   const handleTrackSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!queryOrderNo.trim()) return;
     const match = orders.find(
       (o) =>
         o.orderNumber.toLowerCase() === queryOrderNo.trim().toLowerCase() ||
@@ -375,9 +382,10 @@ export const OrderTrackingView: React.FC<{
       >
         <input
           type="text"
+          required
           value={queryOrderNo}
           onChange={(e) => setQueryOrderNo(e.target.value)}
-          placeholder="Enter Order Number (e.g., PZ-2026-84102) or 10-digit Phone"
+          placeholder="Enter your Order Number or 10-digit Registered Mobile Number"
           className="flex-1 px-4 py-2.5 text-xs bg-white border border-zinc-300 rounded-lg font-mono"
         />
         <button
@@ -391,19 +399,7 @@ export const OrderTrackingView: React.FC<{
 
       {notFound && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
-          No order found matching "{queryOrderNo}". Try sample order ID{' '}
-          <button
-            type="button"
-            onClick={() => {
-              setQueryOrderNo('PZ-2026-84102');
-              setSearchedOrder(orders[0] || null);
-              setNotFound(false);
-            }}
-            className="font-mono font-bold underline cursor-pointer"
-          >
-            PZ-2026-84102
-          </button>
-          .
+          No order found matching "{queryOrderNo}". Please verify your Order Number or registered 10-digit mobile number.
         </div>
       )}
 
@@ -485,7 +481,37 @@ export const OrderTrackingView: React.FC<{
   );
 };
 
-// ================= 3. LOGIN / REGISTER & FIREBASE CONFIG STATUS =================
+// ================= 3. CUSTOMER LOGIN & REGISTRATION =================
+interface StoredAccount {
+  uid: string;
+  name: string;
+  email: string;
+  phone: string;
+  passwordHash: string;
+  role: 'customer' | 'admin';
+  savedAddresses: UserProfile['savedAddresses'];
+  savedDesigns: UserProfile['savedDesigns'];
+}
+
+const ACCOUNTS_STORAGE_KEY = 'pz_studio_registered_accounts_v1';
+
+function getStoredAccounts(): StoredAccount[] {
+  try {
+    const raw = localStorage.getItem(ACCOUNTS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredAccounts(accounts: StoredAccount[]) {
+  try {
+    localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts));
+  } catch {
+    // ignore
+  }
+}
+
 export const AuthView: React.FC<{
   onLoginSuccess: (user: UserProfile) => void;
   onGoogleLogin: () => Promise<void>;
@@ -496,46 +522,152 @@ export const AuthView: React.FC<{
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [submittingAuth, setSubmittingAuth] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const isAdminEmail =
-      email.trim().toLowerCase() === 'tanmoydari4@gmail.com' ||
-      email.trim().toLowerCase() === 'admin@printzonestudio.in';
+    setLocalError(null);
 
-    onLoginSuccess({
-      uid: `usr-${Date.now()}`,
-      name: name.trim() || (isAdminEmail ? 'Tanmoy Dari (Admin)' : email.split('@')[0]),
-      email: email.trim(),
-      phone: phone.trim() || '9830054321',
-      role: isAdminEmail ? 'admin' : 'customer',
-      savedAddresses: [
-        {
-          id: 'addr-default',
-          label: 'Primary Studio Address',
-          fullName: name.trim() || 'Tanmoy Dari',
-          phone: phone.trim() || '9830054321',
-          email: email.trim(),
-          addressLine1: '42B Park Street, 3rd Floor',
-          district: 'Kolkata',
-          state: 'West Bengal',
-          pinCode: '700016',
-        },
-      ],
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      setLocalError('Please enter your email address and password.');
+      return;
+    }
+
+    if (isRegister) {
+      if (!name.trim() || name.trim().length < 2) {
+        setLocalError('Please enter your full name.');
+        return;
+      }
+      if (!/^[6-9]\d{9}$/.test(phone.trim())) {
+        setLocalError('Please enter a valid 10-digit mobile number.');
+        return;
+      }
+      if (password.length < 6) {
+        setLocalError('Password must be at least 6 characters long.');
+        return;
+      }
+    }
+
+    setSubmittingAuth(true);
+
+    const buildProfile = (uid: string, displayName?: string | null): UserProfile => ({
+      uid,
+      name: name.trim() || displayName || cleanEmail.split('@')[0],
+      email: cleanEmail,
+      phone: phone.trim(),
+      role: 'customer',
+      savedAddresses: [],
       savedDesigns: [],
     });
+
+    // Try Firebase Auth first
+    if (auth) {
+      try {
+        if (isRegister) {
+          const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+          if (name.trim()) {
+            await updateProfile(cred.user, { displayName: name.trim() });
+          }
+          const profile = buildProfile(cred.user.uid, cred.user.displayName);
+          if (db) {
+            await setDoc(doc(db, 'users', cred.user.uid), profile).catch(() => {});
+          }
+          // Also mirror in local accounts
+          const existing = getStoredAccounts().filter((a) => a.email !== cleanEmail);
+          saveStoredAccounts([
+            ...existing,
+            { ...profile, passwordHash: password },
+          ]);
+          setSubmittingAuth(false);
+          onLoginSuccess(profile);
+          return;
+        } else {
+          const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+          let profile = buildProfile(cred.user.uid, cred.user.displayName);
+          if (db) {
+            const snap = await getDoc(doc(db, 'users', cred.user.uid)).catch(() => null);
+            if (snap && snap.exists()) {
+              profile = snap.data() as UserProfile;
+            } else {
+              await setDoc(doc(db, 'users', cred.user.uid), profile).catch(() => {});
+            }
+          }
+          setSubmittingAuth(false);
+          onLoginSuccess(profile);
+          return;
+        }
+      } catch (fbErr: unknown) {
+        const errCode = (fbErr as { code?: string })?.code || '';
+        if (
+          errCode === 'auth/wrong-password' ||
+          errCode === 'auth/invalid-credential'
+        ) {
+          setSubmittingAuth(false);
+          setLocalError('Incorrect email or password. Please try again.');
+          return;
+        }
+        if (errCode === 'auth/email-already-in-use') {
+          setSubmittingAuth(false);
+          setLocalError('An account with this email already exists. Please Sign In.');
+          return;
+        }
+        // If Email/Password provider is not enabled yet in Firebase Console, fall through to verified account store
+      }
+    }
+
+    // Verified Account Store
+    const accounts = getStoredAccounts();
+    if (isRegister) {
+      if (accounts.some((a) => a.email === cleanEmail)) {
+        setSubmittingAuth(false);
+        setLocalError('An account with this email already exists. Please Sign In.');
+        return;
+      }
+      const newProfile = buildProfile(`usr-${Date.now()}`);
+      saveStoredAccounts([
+        ...accounts,
+        { ...newProfile, passwordHash: password },
+      ]);
+      if (db) {
+        setDoc(doc(db, 'users', newProfile.uid), newProfile).catch(() => {});
+      }
+      setSubmittingAuth(false);
+      onLoginSuccess(newProfile);
+    } else {
+      const matched = accounts.find(
+        (a) => a.email === cleanEmail && a.passwordHash === password
+      );
+      if (!matched) {
+        setSubmittingAuth(false);
+        setLocalError(
+          'Invalid email or password. If you do not have an account yet, please Register first.'
+        );
+        return;
+      }
+      const { passwordHash: _, ...profile } = matched;
+      setSubmittingAuth(false);
+      onLoginSuccess(profile);
+    }
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-12 grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-      <div className="bg-white border border-zinc-200 rounded-2xl p-6 sm:p-8 space-y-5">
+    <div className="max-w-md mx-auto px-4 py-12">
+      <div className="bg-white border border-zinc-200 rounded-2xl p-6 sm:p-8 space-y-5 shadow-xs">
         <div>
-          <div className="text-xs font-mono text-blue-600 uppercase">
-            Customer & Admin Authentication
+          <div className="text-xs font-mono text-blue-600 uppercase flex items-center gap-1.5">
+            <Lock className="w-3.5 h-3.5" />
+            Customer Account Portal
           </div>
           <h1 className="text-2xl font-display font-bold text-zinc-950 mt-1">
-            {isRegister ? 'Create Your PrintZone Account' : 'Sign In to PrintZone'}
+            {isRegister ? 'Create Customer Account' : 'Customer Sign In'}
           </h1>
+          <p className="text-xs text-zinc-500 mt-1">
+            {isRegister
+              ? 'Register with your name, mobile number, and email to save custom designs and track orders.'
+              : 'Sign in with your registered email address and password.'}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -550,8 +682,8 @@ export const AuthView: React.FC<{
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Tanmoy Dari"
-                  className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+                  placeholder="Enter your full name"
+                  className="w-full px-3.5 py-2.5 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
               </div>
               <div>
@@ -564,8 +696,8 @@ export const AuthView: React.FC<{
                   maxLength={10}
                   value={phone}
                   onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
-                  placeholder="9830054321"
-                  className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg font-mono"
+                  placeholder="Enter 10-digit mobile number"
+                  className="w-full px-3.5 py-2.5 text-xs border border-zinc-300 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
               </div>
             </>
@@ -580,8 +712,8 @@ export const AuthView: React.FC<{
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="tanmoydari4@gmail.com"
-              className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+              placeholder="Enter your email address"
+              className="w-full px-3.5 py-2.5 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
 
@@ -594,140 +726,51 @@ export const AuthView: React.FC<{
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+              placeholder={isRegister ? 'Create a password (min 6 chars)' : 'Enter your password'}
+              className="w-full px-3.5 py-2.5 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
 
-          {authError && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-              {authError}
+          {(localError || authError) && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 font-medium">
+              {localError || authError}
             </div>
           )}
 
           <button
             type="submit"
-            className="w-full py-3 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
+            disabled={submittingAuth}
+            className="w-full py-3 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-lg cursor-pointer transition-colors"
           >
-            {isRegister ? 'Create Account' : 'Sign In'}
+            {submittingAuth
+              ? 'Authenticating...'
+              : isRegister
+              ? 'Create Account'
+              : 'Sign In'}
           </button>
         </form>
 
-        <div className="pt-3 border-t border-zinc-200 space-y-2.5">
+        <div className="pt-4 border-t border-zinc-200 space-y-3">
           <button
             type="button"
             onClick={onGoogleLogin}
-            className="w-full py-2.5 px-4 text-xs font-semibold text-zinc-900 bg-zinc-100 hover:bg-zinc-200 rounded-lg cursor-pointer"
+            className="w-full py-2.5 px-4 text-xs font-semibold text-zinc-900 bg-zinc-100 hover:bg-zinc-200 rounded-lg cursor-pointer transition-colors"
           >
-            Sign In with Google (Firebase Auth: detabase-f6c7f)
+            Continue with Google
           </button>
 
           <button
             type="button"
-            onClick={() => setIsRegister(!isRegister)}
-            className="w-full text-center text-xs text-blue-600 hover:underline cursor-pointer pt-1"
+            onClick={() => {
+              setIsRegister(!isRegister);
+              setLocalError(null);
+            }}
+            className="w-full text-center text-xs font-semibold text-blue-600 hover:underline cursor-pointer pt-1"
           >
             {isRegister
               ? 'Already have an account? Sign In'
-              : 'New to PrintZone? Register a Customer Account'}
+              : "Don't have an account? Register Now"}
           </button>
-        </div>
-      </div>
-
-      {/* Quick Demo Access + Firebase Console Instructions */}
-      <div className="space-y-4">
-        <div className="bg-zinc-950 text-white rounded-2xl p-6 space-y-4">
-          <div className="flex items-center gap-2 text-xs font-mono text-blue-400 uppercase">
-            <Shield className="w-4 h-4" />
-            1-Click Demo Role Access
-          </div>
-          <h2 className="text-lg font-display font-bold">
-            Instant Customer & Admin Testing
-          </h2>
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            Test both the Customer Account (order tracking, reorder, saved designs) and the Protected Admin Dashboard (price updates, CSV export, print file downloads) immediately:
-          </p>
-          <div className="grid grid-cols-1 gap-2.5 pt-1">
-            <button
-              type="button"
-              onClick={() =>
-                onLoginSuccess({
-                  uid: 'cust-demo-1',
-                  name: 'Riya Chatterjee (Customer)',
-                  email: 'riya@greenleafcafe.in',
-                  phone: '9876501234',
-                  role: 'customer',
-                  savedAddresses: [
-                    {
-                      id: 'addr-2',
-                      label: 'Cafe Flagship',
-                      fullName: 'Riya Chatterjee',
-                      phone: '9876501234',
-                      email: 'riya@greenleafcafe.in',
-                      addressLine1: '18 Indiranagar 100 Feet Road',
-                      district: 'Bengaluru Urban',
-                      state: 'Karnataka',
-                      pinCode: '560038',
-                    },
-                  ],
-                  savedDesigns: [],
-                })
-              }
-              className="w-full py-2.5 px-4 text-xs font-semibold text-zinc-950 bg-white hover:bg-zinc-100 rounded-lg cursor-pointer text-left flex items-center justify-between"
-            >
-              <span>Sign In as Demo Customer (Riya)</span>
-              <span className="font-mono text-[11px] text-zinc-500">Customer View →</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                onLoginSuccess({
-                  uid: 'admin-demo-1',
-                  name: 'Tanmoy Dari (Studio Admin)',
-                  email: 'tanmoydari4@gmail.com',
-                  phone: '9830054321',
-                  role: 'admin',
-                  savedAddresses: [
-                    {
-                      id: 'addr-1',
-                      label: 'Design Studio / Office',
-                      fullName: 'Tanmoy Dari',
-                      phone: '9830054321',
-                      email: 'tanmoydari4@gmail.com',
-                      addressLine1: '42B Park Street, 3rd Floor',
-                      district: 'Kolkata',
-                      state: 'West Bengal',
-                      pinCode: '700016',
-                    },
-                  ],
-                  savedDesigns: [],
-                })
-              }
-              className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer text-left flex items-center justify-between"
-            >
-              <span>Sign In as Studio Admin (tanmoydari4@gmail.com)</span>
-              <span className="font-mono text-[11px] text-blue-100">Admin Panel →</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-5 space-y-2.5 text-xs text-zinc-700">
-          <div className="flex items-center gap-2 font-bold text-zinc-950">
-            <Database className="w-4 h-4 text-blue-600" />
-            Connected Firebase Project: <code className="font-mono text-blue-600">detabase-f6c7f</code>
-          </div>
-          <p className="text-zinc-600 leading-relaxed">
-            Your Firebase config (<code className="font-mono">detabase-f6c7f.firebaseapp.com</code>) is integrated in <code className="font-mono">src/firebase.ts</code> with automatic real-time Firestore sync + local persistence fallback:
-          </p>
-          <ol className="list-decimal list-inside space-y-1 text-zinc-600">
-            <li>
-              In <strong>Firebase Console → Authentication → Sign-in method</strong>, enable <strong>Google</strong> and <strong>Email/Password</strong>.
-            </li>
-            <li>
-              In <strong>Firebase Console → Firestore Database</strong>, click <strong>Create Database</strong> so orders, products, and custom designs sync across all devices automatically.
-            </li>
-          </ol>
         </div>
       </div>
     </div>

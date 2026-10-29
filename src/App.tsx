@@ -13,7 +13,6 @@ import {
 } from './types';
 import {
   CATEGORIES,
-  INITIAL_DEMO_ORDERS,
   INITIAL_PRODUCTS,
   INITIAL_SAMPLE_DESIGNS,
   INITIAL_STORE_SETTINGS,
@@ -33,8 +32,8 @@ import {
   OrderTrackingView,
 } from './components/SecondaryPagesView';
 import { auth, db, googleProvider } from './firebase';
-import { signInWithPopup, signOut } from 'firebase/auth';
-import { collection, doc, getDocs, setDoc } from 'firebase/firestore';
+import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { collection, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import {
   Search,
   Sliders,
@@ -47,16 +46,17 @@ import {
   X,
   Send,
   Layers,
-  BookOpen,
+  Home,
+  Grid,
 } from 'lucide-react';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'pz_studio_products_v1',
-  ORDERS: 'pz_studio_orders_v1',
+  ORDERS: 'pz_studio_orders_v2',
   SAMPLES: 'pz_studio_samples_v1',
   SETTINGS: 'pz_studio_settings_v1',
   CART: 'pz_studio_cart_v1',
-  USER: 'pz_studio_user_v1',
+  USER: 'pz_studio_user_v2',
 };
 
 export default function App() {
@@ -77,9 +77,9 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.ORDERS);
-      return saved ? JSON.parse(saved) : INITIAL_DEMO_ORDERS;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_DEMO_ORDERS;
+      return [];
     }
   });
 
@@ -125,10 +125,9 @@ export default function App() {
   const [studioSample, setStudioSample] = useState<SampleDesign | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // WhatsApp Enquiry Modal & Setup Guide Modal
+  // WhatsApp Enquiry Modal
   const [whatsAppModalMsg, setWhatsAppModalMsg] = useState<string | null>(null);
   const [whatsAppSentNotice, setWhatsAppSentNotice] = useState<boolean>(false);
-  const [showSetupGuideModal, setShowSetupGuideModal] = useState<boolean>(false);
   const [newsletterEmail, setNewsletterEmail] = useState<string>('');
   const [newsletterSubscribed, setNewsletterSubscribed] = useState<boolean>(false);
 
@@ -185,27 +184,113 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Non-blocking initial Firestore sync from detabase-f6c7f if enabled
+  // Real-time Firebase Auth & Firestore listeners connected to user's project (detabase-f6c7f)
   useEffect(() => {
-    async function syncFromFirestore() {
+    const unsubs: Array<() => void> = [];
+
+    if (auth) {
       try {
-        const snap = await getDocs(collection(db, 'orders'));
-        if (!snap.empty) {
-          const remoteOrders: Order[] = [];
-          snap.forEach((d) => remoteOrders.push(d.data() as Order));
-          if (remoteOrders.length > 0) {
-            setOrders((prev) => {
-              const map = new Map(prev.map((o) => [o.id, o]));
-              remoteOrders.forEach((ro) => map.set(ro.id, ro));
-              return Array.from(map.values());
-            });
+        const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
+          if (!fbUser) return;
+          const isAdmin =
+            fbUser.email?.toLowerCase() === 'tanmoydari4@gmail.com' ||
+            fbUser.email?.toLowerCase() === 'admin@printzonestudio.in';
+          let profile: UserProfile = {
+            uid: fbUser.uid,
+            name: fbUser.displayName || fbUser.email?.split('@')[0] || 'PrintZone Customer',
+            email: fbUser.email || 'customer@printzonestudio.in',
+            phone: fbUser.phoneNumber || '9830054321',
+            role: isAdmin ? 'admin' : 'customer',
+            savedAddresses: [],
+            savedDesigns: [],
+          };
+          if (db) {
+            try {
+              const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
+              if (userDoc.exists()) {
+                profile = { ...profile, ...(userDoc.data() as Partial<UserProfile>) };
+              } else {
+                await setDoc(doc(db, 'users', fbUser.uid), profile, { merge: true });
+              }
+            } catch {
+              // Ignore if Firestore rules restrict read before setup
+            }
           }
-        }
+          setCurrentUser((prev) => (prev && prev.uid === profile.uid ? prev : profile));
+        });
+        unsubs.push(unsubAuth);
+      } catch {
+        // Fallback to local session
+      }
+    }
+
+    if (db) {
+      try {
+        const unsubOrders = onSnapshot(
+          collection(db, 'orders'),
+          (snap) => {
+            if (!snap.empty) {
+              const remoteOrders: Order[] = [];
+              snap.forEach((d) => remoteOrders.push(d.data() as Order));
+              if (remoteOrders.length > 0) {
+                setOrders((prev) => {
+                  const map = new Map(prev.map((o) => [o.id, o]));
+                  remoteOrders.forEach((ro) => map.set(ro.id, ro));
+                  return Array.from(map.values());
+                });
+              }
+            }
+          },
+          () => {}
+        );
+        unsubs.push(unsubOrders);
+
+        const unsubSettings = onSnapshot(
+          doc(db, 'store', 'settings'),
+          (snap) => {
+            if (snap.exists()) {
+              setSettings(snap.data() as StoreSettings);
+            }
+          },
+          () => {}
+        );
+        unsubs.push(unsubSettings);
+
+        const unsubCatalog = onSnapshot(
+          doc(db, 'store', 'catalog'),
+          (snap) => {
+            if (snap.exists()) {
+              const data = snap.data() as { items?: Product[] };
+              if (Array.isArray(data.items) && data.items.length > 0) {
+                setProducts(data.items);
+              }
+            }
+          },
+          () => {}
+        );
+        unsubs.push(unsubCatalog);
+
+        const unsubSamples = onSnapshot(
+          doc(db, 'store', 'samples'),
+          (snap) => {
+            if (snap.exists()) {
+              const data = snap.data() as { items?: SampleDesign[] };
+              if (Array.isArray(data.items) && data.items.length > 0) {
+                setSampleDesigns(data.items);
+              }
+            }
+          },
+          () => {}
+        );
+        unsubs.push(unsubSamples);
       } catch {
         // Firestore not yet enabled in user's console or offline — local persistence handles seamlessly
       }
     }
-    syncFromFirestore();
+
+    return () => {
+      unsubs.forEach((u) => u());
+    };
   }, []);
 
   const navigateTo = (page: PageId) => {
@@ -297,13 +382,17 @@ export default function App() {
     );
   };
 
-  // Save Custom Design to User Profile
+  // Save Custom Design to User Profile + Firestore (`detabase-f6c7f`)
   const handleSaveCustomDesign = (design: SavedCustomDesign) => {
     if (currentUser) {
-      setCurrentUser({
+      const updatedUser: UserProfile = {
         ...currentUser,
         savedDesigns: [design, ...currentUser.savedDesigns],
-      });
+      };
+      setCurrentUser(updatedUser);
+      if (db && updatedUser.uid && !updatedUser.uid.startsWith('guest-')) {
+        setDoc(doc(db, 'users', updatedUser.uid), updatedUser, { merge: true }).catch(() => {});
+      }
     } else {
       const guestProfile: UserProfile = {
         uid: 'guest-designer',
@@ -335,11 +424,11 @@ export default function App() {
     navigateTo('design-studio');
   };
 
-  // Google Sign-In via user's Firebase project
+  // Google Sign-In
   const handleGoogleLogin = async () => {
     setAuthError(null);
     if (!auth || !googleProvider) {
-      setAuthError('Firebase Auth is not initialized. Please use the 1-Click Demo Login buttons.');
+      setAuthError('Google Sign-In is currently unavailable. Please sign in with your email and password.');
       return;
     }
     try {
@@ -350,18 +439,18 @@ export default function App() {
         u.email?.toLowerCase() === 'admin@printzonestudio.in';
       const profile: UserProfile = {
         uid: u.uid,
-        name: u.displayName || 'PrintZone User',
-        email: u.email || 'user@printzonestudio.in',
-        phone: u.phoneNumber || '9830054321',
+        name: u.displayName || 'PrintZone Customer',
+        email: u.email || '',
+        phone: u.phoneNumber || '',
         role: isAdmin ? 'admin' : 'customer',
         savedAddresses: [],
         savedDesigns: [],
       };
       setCurrentUser(profile);
       navigateTo(isAdmin ? 'admin-dashboard' : 'customer-dashboard');
-    } catch (err) {
+    } catch {
       setAuthError(
-        `Google Sign-In note: Make sure Google provider & authorized domain are enabled in Firebase Console (detabase-f6c7f). You can also use the 1-Click Demo Customer / Admin buttons on the right.`
+        'Could not complete Google Sign-In. Please sign in using your email address and password.'
       );
     }
   };
@@ -497,10 +586,10 @@ export default function App() {
       </header>
 
       {/* Secondary Workspace & Search Utility Bar (Below the Top Header) */}
-      <div className="bg-zinc-50 border-b border-zinc-200 px-4 sm:px-8 py-2.5">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-zinc-50 border-b border-zinc-200 px-3 sm:px-8 py-2.5">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           {/* Search Bar for Products and Designs */}
-          <div className="relative flex-1 min-w-[220px] max-w-md">
+          <div className="relative flex-1 w-full sm:max-w-md">
             <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -511,56 +600,78 @@ export default function App() {
                   setActivePage('all-products');
                 }
               }}
-              placeholder="Search T-shirts, tote bags, 58mm badges, calendars, mugs, visiting cards..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+              placeholder="Search T-shirts, tote bags, badges, calendars, mugs..."
+              className="w-full pl-8 pr-3 py-2 sm:py-1.5 text-xs bg-white border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
 
-          {/* Secondary Quick Links: Bulk, Corporate, Account, Admin, Setup Guide */}
-          <div className="flex flex-wrap items-center gap-2 text-xs">
+          {/* Mobile & Desktop Scrollable Quick Navigation Links */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 text-xs no-scrollbar">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCategoryFilter('all');
+                navigateTo('all-products');
+              }}
+              className="md:hidden px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-zinc-800 font-medium whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              All Products
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateTo('categories')}
+              className="md:hidden px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-zinc-800 font-medium whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Categories
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateTo('sample-gallery')}
+              className="md:hidden px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-zinc-800 font-medium whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Samples
+            </button>
             <button
               type="button"
               onClick={() => navigateTo('bulk-printing')}
-              className="px-2.5 py-1 text-zinc-700 hover:text-zinc-950 font-medium cursor-pointer whitespace-nowrap"
+              className="px-2.5 py-1.5 sm:py-1 bg-white sm:bg-transparent border sm:border-0 border-zinc-200 rounded-md text-zinc-700 hover:text-zinc-950 font-medium cursor-pointer whitespace-nowrap shrink-0"
             >
               Bulk Printing
             </button>
-            <span className="text-zinc-300">·</span>
+            <span className="hidden sm:inline text-zinc-300">·</span>
             <button
               type="button"
               onClick={() => navigateTo('corporate-gifts')}
-              className="px-2.5 py-1 text-zinc-700 hover:text-zinc-950 font-medium cursor-pointer whitespace-nowrap"
+              className="px-2.5 py-1.5 sm:py-1 bg-white sm:bg-transparent border sm:border-0 border-zinc-200 rounded-md text-zinc-700 hover:text-zinc-950 font-medium cursor-pointer whitespace-nowrap shrink-0"
             >
               Corporate Gifts
             </button>
-            <span className="text-zinc-300">·</span>
+            <span className="hidden sm:inline text-zinc-300">·</span>
+            <button
+              type="button"
+              onClick={() => navigateTo('order-tracking')}
+              className="md:hidden px-2.5 py-1.5 bg-white border border-zinc-200 rounded-md text-zinc-700 font-medium whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Track Order
+            </button>
             <button
               type="button"
               onClick={() =>
                 navigateTo(currentUser ? 'customer-dashboard' : 'auth')
               }
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-zinc-800 hover:text-blue-600 font-semibold cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 sm:py-1 bg-white sm:bg-transparent border sm:border-0 border-zinc-200 rounded-md text-zinc-800 hover:text-blue-600 font-semibold cursor-pointer whitespace-nowrap shrink-0"
             >
               <User className="w-3.5 h-3.5" />
-              {currentUser ? currentUser.name.split(' ')[0] : 'Login / Register'}
+              {currentUser ? currentUser.name.split(' ')[0] : 'Login'}
             </button>
-            <span className="text-zinc-300">·</span>
+            <span className="hidden sm:inline text-zinc-300">·</span>
             <button
               type="button"
               onClick={() => navigateTo('admin-dashboard')}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-zinc-800 hover:text-blue-600 font-semibold cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 sm:py-1 bg-white sm:bg-transparent border sm:border-0 border-zinc-200 rounded-md text-zinc-800 hover:text-blue-600 font-semibold cursor-pointer whitespace-nowrap shrink-0"
             >
               <Shield className="w-3.5 h-3.5 text-blue-600" />
-              Admin Panel
-            </button>
-            <span className="text-zinc-300">·</span>
-            <button
-              type="button"
-              onClick={() => setShowSetupGuideModal(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-blue-700 bg-blue-50 hover:bg-blue-100 rounded font-semibold cursor-pointer whitespace-nowrap"
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              Firebase & Setup Guide
+              Admin
             </button>
           </div>
         </div>
@@ -1378,31 +1489,89 @@ export default function App() {
         {activePage === 'admin-dashboard' && (
           <AdminDashboardView
             currentUser={currentUser}
-            onAdminQuickLogin={() =>
-              setCurrentUser({
-                uid: 'admin-demo-1',
-                name: 'Tanmoy Dari (Studio Admin)',
-                email: 'tanmoydari4@gmail.com',
-                phone: '9830054321',
-                role: 'admin',
-                savedAddresses: [],
-                savedDesigns: [],
-              })
-            }
+            onAdminLoginSuccess={(adminUser) => setCurrentUser(adminUser)}
+            onAdminLogout={handleLogout}
             products={products}
-            onSaveProducts={setProducts}
+            onSaveProducts={(nextProducts) => {
+              setProducts(nextProducts);
+              if (db) {
+                setDoc(doc(db, 'store', 'catalog'), { items: nextProducts }).catch(() => {});
+              }
+            }}
             orders={orders}
             onUpdateOrderStatus={handleUpdateOrderStatus}
             sampleDesigns={sampleDesigns}
-            onSaveSampleDesigns={setSampleDesigns}
+            onSaveSampleDesigns={(nextSamples) => {
+              setSampleDesigns(nextSamples);
+              if (db) {
+                setDoc(doc(db, 'store', 'samples'), { items: nextSamples }).catch(() => {});
+              }
+            }}
             settings={settings}
-            onSaveSettings={setSettings}
+            onSaveSettings={(nextSettings) => {
+              setSettings(nextSettings);
+              if (db) {
+                setDoc(doc(db, 'store', 'settings'), nextSettings).catch(() => {});
+              }
+            }}
           />
         )}
       </main>
 
+      {/* MOBILE THUMB NAVIGATION BAR (Visible on Mobile screens <768px) */}
+      <div className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-zinc-200 px-2 py-1.5 grid grid-cols-4 gap-1">
+        <button
+          type="button"
+          onClick={() => navigateTo('home')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+            activePage === 'home' ? 'text-blue-600' : 'text-zinc-600'
+          }`}
+        >
+          <Home className="w-4 h-4 mb-0.5" />
+          <span>Home</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedCategoryFilter('all');
+            navigateTo('all-products');
+          }}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+            activePage === 'all-products' || activePage === 'categories'
+              ? 'text-blue-600'
+              : 'text-zinc-600'
+          }`}
+        >
+          <Grid className="w-4 h-4 mb-0.5" />
+          <span>Products</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => navigateTo('design-studio')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+            activePage === 'design-studio' ? 'text-blue-600' : 'text-zinc-600'
+          }`}
+        >
+          <Sliders className="w-4 h-4 mb-0.5" />
+          <span>Customize</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => navigateTo('cart-checkout')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+            activePage === 'cart-checkout' ? 'text-blue-600' : 'text-zinc-600'
+          }`}
+        >
+          <ShoppingBag className="w-4 h-4 mb-0.5" />
+          <span>Cart ({cartItemCount})</span>
+        </button>
+      </div>
+
       {/* NEWSLETTER & WHATSAPP FOOTER BAR */}
-      <footer className="bg-zinc-950 text-zinc-400 border-t border-zinc-800 mt-16">
+      <footer className="bg-zinc-950 text-zinc-400 border-t border-zinc-800 mt-16 pb-16 md:pb-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-10">
           {/* Newsletter Row */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-10 border-b border-zinc-800">
@@ -1580,16 +1749,10 @@ export default function App() {
 
           <div className="pt-8 border-t border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs text-zinc-500">
             <div>
-              © {new Date().getFullYear()} PrintZone – Custom Printing Studio. Demo sample products & prices are configurable via the Admin Panel.
+              © {new Date().getFullYear()} PrintZone – Custom Printing Studio. All rights reserved.
             </div>
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() => setShowSetupGuideModal(true)}
-                className="text-blue-400 hover:underline cursor-pointer"
-              >
-                Firebase (detabase-f6c7f) & Deployment Instructions
-              </button>
+            <div className="font-mono text-zinc-400">
+              Custom Printing & Personalized Gifts across India
             </div>
           </div>
         </div>
@@ -1651,86 +1814,6 @@ export default function App() {
                 <Send className="w-3.5 h-3.5" />
                 Send via WhatsApp Web / App
               </a>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* SETUP, FIREBASE (detabase-f6c7f) & DEPLOYMENT GUIDE MODAL */}
-      {showSetupGuideModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 sm:p-8 space-y-5 border border-zinc-200 shadow-2xl">
-            <div className="flex items-center justify-between pb-4 border-b border-zinc-200">
-              <div>
-                <div className="text-xs font-mono text-blue-600 uppercase">
-                  Setup, Database & Production Deployment Guide
-                </div>
-                <h2 className="text-xl font-display font-bold text-zinc-950">
-                  PrintZone – Custom Printing Studio Configuration
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowSetupGuideModal(false)}
-                className="p-1.5 text-zinc-500 hover:text-zinc-950 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4 text-xs text-zinc-700 leading-relaxed max-h-[65vh] overflow-y-auto pr-2">
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-1.5">
-                <div className="font-bold text-blue-950">
-                  1. Your Firebase Project (detabase-f6c7f) Is Connected! (এবার কী করবেন?)
-                </div>
-                <p className="text-blue-900">
-                  আপনার দেওয়া Firebase config (<code className="font-mono">projectId: "detabase-f6c7f"</code>) ইতিমধ্যেই <code className="font-mono">src/firebase.ts</code> ফাইলে যুক্ত করা হয়েছে। এখন Firebase Console-এ গিয়ে নিচের দুটি অপশন চালু করে নিন:
-                </p>
-                <ul className="list-disc list-inside space-y-1 text-blue-900">
-                  <li>
-                    <strong>Authentication:</strong> Firebase Console → Build → Authentication → Sign-in method-এ গিয়ে <strong>Google</strong> এবং <strong>Email/Password</strong> Enable করুন।
-                  </li>
-                  <li>
-                    <strong>Firestore Database:</strong> Firebase Console → Build → Firestore Database → Create Database ক্লিক করুন। তখন আপনার সমস্ত অর্ডার, প্রোডাক্ট ও কাস্টম ডিজাইন ক্লাউডে সেভ হবে।
-                  </li>
-                </ul>
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="font-bold text-zinc-950">
-                  2. Managing Products, Prices & Customer Print Files (Admin Panel)
-                </div>
-                <p>
-                  Click <strong>Admin Panel</strong> in the top utility bar (or sign in with <code className="font-mono">tanmoydari4@gmail.com</code>). From there you can edit any product’s base price, MOQ, stock status, download customer-created PNG print proofs, update order statuses, and export orders to CSV.
-                </p>
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="font-bold text-zinc-950">
-                  3. Deploying from the <code className="font-mono text-blue-600">main</code> Branch (GitHub / Firebase / Vercel)
-                </div>
-                <p>
-                  <code className="font-mono">firebase.json</code>, <code className="font-mono">.firebaserc</code>, <code className="font-mono">.github/workflows/deploy-main.yml</code>, এবং <code className="font-mono">vercel.json</code> ফাইলগুলো <code className="font-mono">main</code> ব্রাঞ্চের জন্য রেডি করা হয়েছে:
-                </p>
-                <pre className="bg-zinc-950 text-zinc-100 p-3 rounded-lg font-mono text-[11px] overflow-x-auto">
-{`git branch -M main
-git push -u origin main
-
-# Or deploy directly to Firebase Hosting (detabase-f6c7f):
-npm run build
-npx firebase-tools deploy --only hosting`}
-                </pre>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-zinc-200 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowSetupGuideModal(false)}
-                className="px-5 py-2 text-xs font-semibold text-white bg-zinc-950 rounded-lg cursor-pointer"
-              >
-                Got It, Close Guide
-              </button>
             </div>
           </div>
         </div>
