@@ -1,0 +1,6 @@
+{
+  "name": "PrintZone – Custom Printing Studio",
+  "description": "Custom printing and personalized gifts e-commerce studio for apparel, bags, badges, calendars, corporate gifts, and business stationery with an interactive Konva.js design studio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
