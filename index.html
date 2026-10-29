@@ -16,6 +16,26 @@
   <body class="bg-white text-zinc-950 antialiased selection:bg-blue-600 selection:text-white">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          var root = document.getElementById('root');
+          if (root && root.innerHTML.trim() === '' && window.location.hostname.indexOf('github.io') !== -1) {
+            root.innerHTML =
+              '<div style="max-width:640px;margin:60px auto;padding:32px;border:1px solid #e4e4e7;border-radius:16px;font-family:sans-serif;line-height:1.6;background:#fafafa;color:#09090b;">' +
+              '<div style="font-size:12px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:0.05em;">GitHub Pages Configuration Step Required</div>' +
+              '<h1 style="font-size:22px;font-weight:800;margin:8px 0 12px;">Change GitHub Pages Branch from <code>main</code> to <code>gh-pages</code></h1>' +
+              '<p style="font-size:14px;color:#3f3f46;margin-bottom:16px;">আপনার কোডটি React + TypeScript (Vite) দিয়ে তৈরি। GitHub Pages-এ সরাসরি <code>main</code> ব্রাঞ্চ সিলেক্ট থাকলে ব্রাউজার কাঁচা <code>.tsx</code> ফাইল রান করতে পারে না, তাই পেজটি সাদা (Blank) দেখায়।</p>' +
+              '<ol style="font-size:14px;color:#18181b;padding-left:20px;margin-bottom:20px;">' +
+              '<li style="margin-bottom:8px;">আপনার GitHub রিপোজিটরির <strong>Settings → Pages</strong>-এ যান।</li>' +
+              '<li style="margin-bottom:8px;"><strong>Build and deployment → Branch</strong> অপশনে যেখানে <code>main</code> দেওয়া আছে, সেটিতে ক্লিক করে <strong><code>gh-pages</code></strong> ব্রাঞ্চ সিলেক্ট করুন এবং <strong>Save</strong> চাপুন।</li>' +
+              '<li>১ মিনিট পর পেজটি রিফ্রেশ করলেই আপনার সম্পূর্ণ <strong>PrintZone – Custom Printing Studio</strong> ওয়েবসাইটটি লাইভ দেখতে পাবেন!</li>' +
+              '</ol>' +
+              '</div>';
+          }
+        }, 1800);
+      });
+    </script>
   </body>
 </html>
 

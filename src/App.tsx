@@ -261,7 +261,9 @@ export default function App() {
     }
 
     try {
-      await setDoc(doc(db, 'orders', newOrder.id), newOrder);
+      if (db) {
+        await setDoc(doc(db, 'orders', newOrder.id), newOrder);
+      }
     } catch {
       // Stored locally if Firestore rules aren't open yet
     }
@@ -287,7 +289,9 @@ export default function App() {
             },
           ],
         };
-        setDoc(doc(db, 'orders', updated.id), updated).catch(() => {});
+        if (db) {
+          setDoc(doc(db, 'orders', updated.id), updated).catch(() => {});
+        }
         return updated;
       })
     );
@@ -334,6 +338,10 @@ export default function App() {
   // Google Sign-In via user's Firebase project
   const handleGoogleLogin = async () => {
     setAuthError(null);
+    if (!auth || !googleProvider) {
+      setAuthError('Firebase Auth is not initialized. Please use the 1-Click Demo Login buttons.');
+      return;
+    }
     try {
       const res = await signInWithPopup(auth, googleProvider);
       const u = res.user;
@@ -360,7 +368,9 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      if (auth) {
+        await signOut(auth);
+      }
     } catch {
       // ignore
     }
