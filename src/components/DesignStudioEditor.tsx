@@ -23,6 +23,9 @@ import {
   Sparkles,
   ArrowUp,
   ArrowDown,
+  Image as ImageIcon,
+  FileText,
+  X,
 } from 'lucide-react';
 
 interface DesignStudioEditorProps {
@@ -150,6 +153,17 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
   const [backPreviewUrl, setBackPreviewUrl] = useState<string>('');
   const [showBeforeOrderModal, setShowBeforeOrderModal] = useState<boolean>(false);
   const [saveFeedback, setSaveFeedback] = useState<boolean>(false);
+
+  // Studio Mode: 'reference-upload' (Upload Reference Photo without manual designing) or 'canvas' (Interactive Konva Editor)
+  const [studioMode, setStudioMode] = useState<'canvas' | 'reference-upload'>('canvas');
+  const [referencePhoto, setReferencePhoto] = useState<{
+    fileName: string;
+    fileDataUrl: string;
+    fileType: string;
+    fileSize: string;
+  } | null>(null);
+  const [referenceNotes, setReferenceNotes] = useState<string>('');
+  const referenceInputRef = useRef<HTMLInputElement | null>(null);
 
   // Konva imperative refs
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
@@ -642,7 +656,65 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
     setTimeout(() => setSaveFeedback(false), 2500);
   };
 
+  const handleReferenceFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const sizeKb = Math.max(1, Math.round(file.size / 1024));
+    const formattedSize =
+      sizeKb >= 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setReferencePhoto({
+        fileName: file.name,
+        fileDataUrl: reader.result as string,
+        fileType: file.type || file.name.split('.').pop()?.toUpperCase() || 'REFERENCE_PHOTO',
+        fileSize: formattedSize,
+      });
+      setStudioMode('reference-upload');
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
   const handleConfirmAddToCart = () => {
+    // If user uploaded a Reference Photo / Document or is in Reference Photo mode
+    if (studioMode === 'reference-upload' || referencePhoto) {
+      const item: CartItem = {
+        id: `cart-${Date.now()}`,
+        productId: selectedProduct.id,
+        productName: selectedProduct.name,
+        categoryName: selectedProduct.categoryName,
+        sku: selectedProduct.sku,
+        mockupShape: selectedProduct.mockupShape,
+        productImageUrl: selectedProduct.imageUrl,
+        selectedColor,
+        selectedSize,
+        selectedMaterial,
+        printingMethod,
+        printSide: printSideMode,
+        quantity,
+        unitBasePrice: selectedProduct.basePrice,
+        bothSideExtra: bothSidesExtra,
+        discountPercent: applicableDiscount,
+        finalUnitPrice,
+        lineTotal,
+        directArtworkUpload: {
+          fileName: referencePhoto
+            ? `REF-${referencePhoto.fileName}`
+            : 'Reference Instruction Only',
+          fileDataUrl: referencePhoto ? referencePhoto.fileDataUrl : '',
+          fileType: referencePhoto ? referencePhoto.fileType : 'REFERENCE_NOTE',
+          fileSize: referencePhoto ? referencePhoto.fileSize : '',
+          notes:
+            referenceNotes.trim() ||
+            'Print according to uploaded Reference Photo (Sent from Custom Studio)',
+        },
+      };
+      onAddToCart(item);
+      setShowBeforeOrderModal(false);
+      return;
+    }
+
     const snap = captureCurrentStageSnapshot();
     const item: CartItem = {
       id: `cart-${Date.now()}`,
@@ -651,6 +723,7 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
       categoryName: selectedProduct.categoryName,
       sku: selectedProduct.sku,
       mockupShape: selectedProduct.mockupShape,
+      productImageUrl: selectedProduct.imageUrl,
       selectedColor,
       selectedSize,
       selectedMaterial,
@@ -671,6 +744,14 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
         backElements,
         uploadedFiles,
       },
+      directArtworkUpload: referenceNotes.trim()
+        ? {
+            fileName: 'Studio Custom Note',
+            fileDataUrl: '',
+            fileType: 'TEXT_NOTE',
+            notes: referenceNotes.trim(),
+          }
+        : undefined,
     };
     onAddToCart(item);
     setShowBeforeOrderModal(false);
@@ -684,10 +765,10 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-zinc-200">
         <div>
           <div className="text-xs font-mono text-blue-600 uppercase tracking-wider">
-            Interactive Konva.js Canvas Engine · 300 DPI Vector & Raster Workspace
+            Custom Design Studio · Design Yourself OR Upload Reference Photo
           </div>
           <h1 className="text-2xl sm:text-3xl font-display font-bold text-zinc-950 mt-1">
-            Online Product Design Studio
+            Online Product Design Studio & Reference Photo Upload
           </h1>
         </div>
 
@@ -719,10 +800,245 @@ export const DesignStudioEditor: React.FC<DesignStudioEditorProps> = ({
             className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <ShoppingBag className="w-4 h-4" />
-            Add Custom Order · ₹{lineTotal.toLocaleString('en-IN')}
+            {studioMode === 'reference-upload' || referencePhoto
+              ? `Send Reference Photo & Order · ₹${lineTotal.toLocaleString('en-IN')}`
+              : `Add Custom Order · ₹${lineTotal.toLocaleString('en-IN')}`}
           </button>
         </div>
       </div>
+
+      {/* PROMINENT MODE SWITCHER: 1. Upload Reference Photo (No Manual Design Needed) vs 2. Design Yourself */}
+      <input
+        ref={referenceInputRef}
+        type="file"
+        accept=".jpg,.jpeg,.png,.webp,.svg,.pdf,.doc,.docx,.cdr,.ai,.psd,.zip"
+        onChange={handleReferenceFileUpload}
+        className="hidden"
+      />
+
+      <div className="mt-6 bg-blue-50/70 border-2 border-blue-200 rounded-2xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="inline-flex items-center gap-1.5 text-xs font-mono font-bold text-blue-700 uppercase">
+            <ImageIcon className="w-4 h-4" />
+            Don't want to design manually? Upload a Reference Photo!
+          </div>
+          <h2 className="text-base sm:text-lg font-display font-bold text-zinc-950">
+            Have a Reference Photo, Screenshot, or Sample Design on your Phone?
+          </h2>
+          <p className="text-xs text-zinc-600">
+            You don't need to design manually if you have a reference photo! Simply upload your reference picture or document and our studio designers will prepare & print it for you.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setStudioMode('reference-upload');
+              if (!referencePhoto) {
+                referenceInputRef.current?.click();
+              }
+            }}
+            className={`px-4 py-2.5 text-xs font-semibold rounded-xl transition-colors cursor-pointer inline-flex items-center gap-2 ${
+              studioMode === 'reference-upload'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'bg-white text-blue-700 border border-blue-300 hover:bg-blue-100'
+            }`}
+          >
+            <Upload className="w-4 h-4" />
+            {referencePhoto
+              ? `Reference Uploaded (${referencePhoto.fileName.slice(0, 14)}...)`
+              : 'Upload Reference Photo / File'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStudioMode('canvas')}
+            className={`px-4 py-2.5 text-xs font-semibold rounded-xl transition-colors cursor-pointer inline-flex items-center gap-2 ${
+              studioMode === 'canvas'
+                ? 'bg-zinc-950 text-white'
+                : 'bg-white text-zinc-700 border border-zinc-300 hover:bg-zinc-100'
+            }`}
+          >
+            <Sparkles className="w-4 h-4" />
+            Design Yourself on Canvas
+          </button>
+        </div>
+      </div>
+
+      {/* IF USER IS IN REFERENCE PHOTO UPLOAD MODE: Show Dedicated Reference Photo Upload & Preview Panel */}
+      {studioMode === 'reference-upload' && (
+        <div className="mt-6 bg-white border-2 border-blue-600 rounded-2xl p-5 sm:p-6 space-y-5 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-zinc-200">
+            <div>
+              <span className="text-xs font-mono font-bold text-emerald-700 uppercase">
+                Direct Reference Photo Mode Active
+              </span>
+              <h3 className="text-lg font-display font-bold text-zinc-950">
+                Upload Your Reference Photo & Send Directly for Printing
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStudioMode('canvas')}
+              className="text-xs font-semibold text-blue-600 hover:underline self-start sm:self-auto cursor-pointer"
+            >
+              Switch to Manual Canvas Designer →
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Left 5 Cols: Reference Photo Upload & Preview */}
+            <div className="lg:col-span-5 space-y-3">
+              {referencePhoto ? (
+                <div className="bg-zinc-50 border border-emerald-300 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-800 truncate">
+                      ✓ Reference File: {referencePhoto.fileName}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setReferencePhoto(null)}
+                      className="text-xs font-semibold text-red-600 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      Remove
+                    </button>
+                  </div>
+
+                  {referencePhoto.fileDataUrl.startsWith('data:image') ? (
+                    <div className="aspect-4/3 bg-white border border-zinc-200 rounded-xl overflow-hidden flex items-center justify-center p-2">
+                      <img
+                        src={referencePhoto.fileDataUrl}
+                        alt="Uploaded Reference"
+                        className="max-w-full max-h-full object-contain rounded-lg"
+                      />
+                    </div>
+                  ) : (
+                    <div className="p-6 bg-white border border-zinc-200 rounded-xl text-center space-y-1">
+                      <FileText className="w-8 h-8 text-blue-600 mx-auto" />
+                      <div className="text-xs font-bold text-zinc-900">
+                        {referencePhoto.fileName}
+                      </div>
+                      <div className="text-[11px] font-mono text-zinc-500">
+                        {referencePhoto.fileSize} · {referencePhoto.fileType}
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => referenceInputRef.current?.click()}
+                    className="w-full py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl cursor-pointer"
+                  >
+                    Change Reference Photo / File
+                  </button>
+                </div>
+              ) : (
+                <div
+                  onClick={() => referenceInputRef.current?.click()}
+                  className="aspect-4/3 bg-blue-50/40 hover:bg-blue-50 border-2 border-dashed border-blue-400 rounded-2xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors space-y-2.5"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center">
+                    <Upload className="w-6 h-6" />
+                  </div>
+                  <div className="text-sm font-display font-bold text-zinc-950">
+                    Click to Upload Reference Photo, Screenshot, or Document
+                  </div>
+                  <p className="text-xs text-zinc-500 max-w-xs">
+                    Supports JPG, PNG, WEBP, PDF, Word, CDR, AI, PSD, or ZIP files from your mobile or computer.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Right 7 Cols: Product Selection, Reference Instructions & Direct Send Button */}
+            <div className="lg:col-span-7 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    Select Product to Print On
+                  </label>
+                  <select
+                    value={selectedProduct.id}
+                    onChange={(e) => handleProductChange(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-zinc-50 border border-zinc-300 rounded-xl font-medium"
+                  >
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — ₹{p.basePrice}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    Select Size & Print Side
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={selectedSize}
+                      onChange={(e) => setSelectedSize(e.target.value)}
+                      className="flex-1 px-2.5 py-2 text-xs bg-zinc-50 border border-zinc-300 rounded-xl font-mono"
+                    >
+                      {selectedProduct.sizes.map((sz) => (
+                        <option key={sz} value={sz}>
+                          Size: {sz}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={printSideMode}
+                      onChange={(e) =>
+                        setPrintSideMode(e.target.value as 'Front' | 'Back' | 'Both Sides')
+                      }
+                      className="flex-1 px-2.5 py-2 text-xs bg-zinc-50 border border-zinc-300 rounded-xl font-mono"
+                    >
+                      <option value="Front">Front Print</option>
+                      <option value="Back">Back Print</option>
+                      <option value="Both Sides">Both Sides</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-800 mb-1.5">
+                  Write Instructions About Your Reference Photo (Optional):
+                </label>
+                <textarea
+                  rows={3}
+                  value={referenceNotes}
+                  onChange={(e) => setReferenceNotes(e.target.value)}
+                  placeholder="Example: Make the design exactly like this reference photo, change the name to 'RAHUL', print on the front center..."
+                  className="w-full px-3.5 py-2.5 text-xs bg-zinc-50 border border-zinc-300 rounded-xl focus:bg-white focus:outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-zinc-200">
+                <div>
+                  <div className="text-xs text-zinc-500">
+                    Selected: <strong>{selectedProduct.name}</strong> ({selectedColor.name} · {selectedSize} · Qty {quantity})
+                  </div>
+                  <div className="text-lg font-mono font-extrabold text-zinc-950">
+                    Total: ₹{lineTotal.toLocaleString('en-IN')}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleConfirmAddToCart}
+                  className="px-6 py-3.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-colors cursor-pointer inline-flex items-center justify-center gap-2"
+                >
+                  <ShoppingBag className="w-4 h-4" />
+                  <span>Send Reference Photo & Proceed to Order</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 3-Column Studio Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mt-8 items-start">

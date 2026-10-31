@@ -121,6 +121,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [newProdShape, setNewProdShape] = useState<MockupShape>('tshirt');
   const [newProdDesc, setNewProdDesc] = useState('');
   const [newProdLeadTime, setNewProdLeadTime] = useState('2–4 business days');
+  const [newProdImageUrl, setNewProdImageUrl] = useState('');
 
   // New Sample Design Form State
   const [newSampleTitle, setNewSampleTitle] = useState('');
@@ -305,12 +306,26 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     document.body.removeChild(link);
   };
 
-  // Download Customer Print Artwork or Production Job Ticket
+  // Download Customer Uploaded Document, Print Artwork, or Production Job Ticket
   const handleDownloadArtwork = (order: Order, itemIdx: number) => {
     const item = order.items[itemIdx];
-    const previewUrl =
-      item.customDesign?.frontPreviewDataUrl || item.directArtworkUpload?.fileDataUrl;
 
+    // 1. If customer uploaded a document or image file (PDF, DOCX, XLS, JPG, PNG, ZIP, etc.)
+    if (
+      item.directArtworkUpload?.fileDataUrl &&
+      item.directArtworkUpload.fileDataUrl.startsWith('data:')
+    ) {
+      const a = document.createElement('a');
+      a.href = item.directArtworkUpload.fileDataUrl;
+      a.download = `${order.orderNumber}-${item.directArtworkUpload.fileName}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    // 2. If customer created a custom canvas design in Design Studio
+    const previewUrl = item.customDesign?.frontPreviewDataUrl;
     if (previewUrl && previewUrl.startsWith('data:image')) {
       const a = document.createElement('a');
       a.href = previewUrl;
@@ -318,31 +333,33 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-    } else {
-      // Export structured Pre-Press Production Spec JSON
-      const spec = {
-        orderNumber: order.orderNumber,
-        customer: order.customerName,
-        sku: item.sku,
-        product: item.productName,
-        color: item.selectedColor.name,
-        size: item.selectedSize,
-        material: item.selectedMaterial,
-        printingMethod: item.printingMethod,
-        printSide: item.printSide,
-        quantity: item.quantity,
-        elements: item.customDesign?.frontElements || [],
-      };
-      const blob = new Blob([JSON.stringify(spec, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${order.orderNumber}-${item.sku}-job-ticket.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      return;
     }
+
+    // 3. Otherwise export structured Pre-Press Production Spec JSON with customer notes
+    const spec = {
+      orderNumber: order.orderNumber,
+      customer: order.customerName,
+      sku: item.sku,
+      product: item.productName,
+      color: item.selectedColor.name,
+      size: item.selectedSize,
+      material: item.selectedMaterial,
+      printingMethod: item.printingMethod,
+      printSide: item.printSide,
+      quantity: item.quantity,
+      customerRecommendationNote: item.directArtworkUpload?.notes || 'None',
+      elements: item.customDesign?.frontElements || [],
+    };
+    const blob = new Blob([JSON.stringify(spec, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${order.orderNumber}-${item.sku}-job-ticket.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleCreateProduct = (e: React.FormEvent) => {
@@ -377,6 +394,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         { minQty: 50, discountPercent: 20 },
       ],
       mockupShape: newProdShape,
+      imageUrl: newProdImageUrl.trim() || undefined,
       defaultGraphicText: newProdName.slice(0, 16).toUpperCase(),
       defaultGraphicSubtext: 'CUSTOM EDITION',
       defaultAccentColor: '#2563EB',
@@ -385,6 +403,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     onSaveProducts([created, ...products]);
     setNewProdName('');
     setNewProdDesc('');
+    setNewProdImageUrl('');
     setShowNewProductForm(false);
   };
 
@@ -618,44 +637,71 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   </div>
                 </div>
 
-                {/* Order Line Items & Print File Download */}
+                {/* Order Line Items, Customer Uploaded Document & Recommendation Note */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {order.items.map((item, idx) => (
                     <div
                       key={item.id}
-                      className="flex items-center justify-between gap-4 p-3 bg-zinc-50 rounded-lg border border-zinc-200"
+                      className="flex flex-col justify-between gap-3 p-3.5 bg-zinc-50 rounded-xl border border-zinc-200"
                     >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-14 h-14 bg-white border border-zinc-200 rounded-lg shrink-0 overflow-hidden">
-                          <ProductMockup
-                            shape={item.mockupShape}
-                            color={item.selectedColor}
-                            customPreviewUrl={item.customDesign?.frontPreviewDataUrl}
-                            className="w-full h-full"
-                          />
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 min-w-0">
+                          <div className="w-16 h-16 bg-white border border-zinc-200 rounded-lg shrink-0 overflow-hidden">
+                            <ProductMockup
+                              shape={item.mockupShape}
+                              color={item.selectedColor}
+                              productImageUrl={item.productImageUrl}
+                              customPreviewUrl={
+                                item.customDesign?.frontPreviewDataUrl ||
+                                (item.directArtworkUpload?.fileDataUrl?.startsWith('data:image')
+                                  ? item.directArtworkUpload.fileDataUrl
+                                  : undefined)
+                              }
+                              className="w-full h-full"
+                            />
+                          </div>
+                          <div className="min-w-0 space-y-0.5">
+                            <div className="text-xs font-bold text-zinc-900 truncate">
+                              {item.productName}
+                            </div>
+                            <div className="text-[11px] text-zinc-600">
+                              {item.selectedColor.name} · Size {item.selectedSize} · {item.printSide} ·{' '}
+                              <strong className="font-mono">Qty {item.quantity}</strong>
+                            </div>
+                            <div className="text-[11px] text-zinc-500 font-mono">
+                              Method: {item.printingMethod}
+                            </div>
+                            {item.directArtworkUpload?.fileDataUrl && (
+                              <div className="text-[11px] font-mono text-emerald-700 font-semibold truncate">
+                                ✓ Uploaded Doc: {item.directArtworkUpload.fileName}{' '}
+                                {item.directArtworkUpload.fileSize
+                                  ? `(${item.directArtworkUpload.fileSize})`
+                                  : ''}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <div className="text-xs font-bold text-zinc-900 truncate">
-                            {item.productName}
-                          </div>
-                          <div className="text-[11px] text-zinc-600">
-                            {item.selectedColor.name} · Size {item.selectedSize} · {item.printSide} ·{' '}
-                            <strong className="font-mono">Qty {item.quantity}</strong>
-                          </div>
-                          <div className="text-[11px] text-zinc-500 font-mono">
-                            Method: {item.printingMethod}
-                          </div>
-                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadArtwork(order, idx)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors shrink-0 cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          {item.directArtworkUpload?.fileDataUrl
+                            ? 'Download Doc'
+                            : 'Print File'}
+                        </button>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadArtwork(order, idx)}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors shrink-0 cursor-pointer"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Print File
-                      </button>
+                      {item.directArtworkUpload?.notes && (
+                        <div className="text-xs text-zinc-800 bg-white border border-blue-200 rounded-lg p-2.5">
+                          <span className="font-bold text-blue-700">
+                            Customer Recommendation / Note:{' '}
+                          </span>
+                          {item.directArtworkUpload.notes}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -668,167 +714,253 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       {/* TAB 2: PRODUCTS & PRICING MANAGEMENT */}
       {activeTab === 'products' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-display font-bold text-zinc-950">
-              Manage Product Catalog, Base Prices, MOQ & Lead Times
-            </h2>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-zinc-200 rounded-xl p-4">
+            <div>
+              <h2 className="text-lg font-display font-bold text-zinc-950">
+                Add Products, Change Product Photos & Manage Pricing
+              </h2>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Add new shopping products or click <strong>"Change Photo"</strong> on any product below to upload a new picture from your phone or computer.
+              </p>
+            </div>
             <button
               type="button"
               onClick={() => setShowNewProductForm(!showNewProductForm)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl cursor-pointer self-start sm:self-auto shrink-0"
             >
               <Plus className="w-4 h-4" />
-              Add New Product
+              {showNewProductForm ? 'Close Add Product Form' : 'Add New Product'}
             </button>
           </div>
 
           {showNewProductForm && (
             <form
               onSubmit={handleCreateProduct}
-              className="bg-zinc-50 border border-zinc-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-3 gap-4"
+              className="bg-zinc-50 border border-blue-200 rounded-2xl p-5 space-y-5"
             >
-              <div>
-                <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                  Product Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newProdName}
-                  onChange={(e) => setNewProdName(e.target.value)}
-                  placeholder="e.g., Heavyweight Acid-Wash Tee"
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
-                />
+              <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
+                <h3 className="text-sm font-display font-bold text-zinc-950">
+                  Add New Shopping Product with Picture
+                </h3>
+                <span className="text-[11px] font-mono text-blue-600">
+                  Saves to Storefront & Firebase
+                </span>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                  Category
-                </label>
-                <select
-                  value={newProdCat}
-                  onChange={(e) => setNewProdCat(e.target.value as CategoryId)}
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
-                >
-                  {CATEGORIES.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Left 4 Cols: Live Product Picture Upload & Preview */}
+                <div className="lg:col-span-4 bg-white border border-zinc-200 rounded-xl p-4 space-y-3">
+                  <div className="text-xs font-semibold text-zinc-800">
+                    Product Picture Preview
+                  </div>
+                  <div className="aspect-4/3 bg-zinc-100 border border-zinc-200 rounded-xl overflow-hidden flex items-center justify-center">
+                    <ProductMockup
+                      shape={newProdShape}
+                      color={PRODUCT_COLORS.obsidianBlack}
+                      productImageUrl={newProdImageUrl.trim() || undefined}
+                      graphicText={newProdName ? newProdName.slice(0, 14).toUpperCase() : 'NEW PRODUCT'}
+                      className="w-full h-full"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                  Mockup Silhouette
-                </label>
-                <select
-                  value={newProdShape}
-                  onChange={(e) => setNewProdShape(e.target.value as MockupShape)}
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
-                >
-                  {[
-                    'tshirt',
-                    'polo',
-                    'hoodie',
-                    'jersey',
-                    'cap',
-                    'apron',
-                    'totebag',
-                    'jutebag',
-                    'schoolbag',
-                    'badge',
-                    'namebadge',
-                    'deskcalendar',
-                    'wallcalendar',
-                    'mug',
-                    'phonecase',
-                    'visitingcard',
-                    'idcard',
-                    'canvasprint',
-                  ].map((sh) => (
-                    <option key={sh} value={sh}>
-                      {sh}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                  <label className="w-full py-2.5 px-3 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl cursor-pointer flex items-center justify-center gap-2 transition-colors">
+                    <span>Upload Product Photo (JPG / PNG / WEBP)</span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/svg+xml"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => setNewProdImageUrl(reader.result as string);
+                        reader.readAsDataURL(file);
+                        e.target.value = '';
+                      }}
+                      className="hidden"
+                    />
+                  </label>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                  Base Price (₹ INR)
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  value={newProdPrice}
-                  onChange={(e) => setNewProdPrice(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg font-mono"
-                />
-              </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-600 mb-1">
+                      Or Paste Direct Image URL:
+                    </label>
+                    <input
+                      type="text"
+                      value={newProdImageUrl}
+                      onChange={(e) => setNewProdImageUrl(e.target.value)}
+                      placeholder="https://example.com/product-photo.jpg"
+                      className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+                </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                  Minimum Order Quantity (MOQ)
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  value={newProdMoq}
-                  onChange={(e) => setNewProdMoq(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg font-mono"
-                />
-              </div>
+                {/* Right 8 Cols: Product Details Fields */}
+                <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Product Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newProdName}
+                      onChange={(e) => setNewProdName(e.target.value)}
+                      placeholder="e.g., Custom Printed Oversized Cotton T-Shirt"
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                  Estimated Production Time
-                </label>
-                <input
-                  type="text"
-                  value={newProdLeadTime}
-                  onChange={(e) => setNewProdLeadTime(e.target.value)}
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Category
+                    </label>
+                    <select
+                      value={newProdCat}
+                      onChange={(e) => {
+                        const nextCat = e.target.value as CategoryId;
+                        setNewProdCat(nextCat);
+                        const catObj = CATEGORIES.find((c) => c.id === nextCat);
+                        if (catObj && catObj.subItems[0]) {
+                          setNewProdSubcat(catObj.subItems[0]);
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
+                    >
+                      {CATEGORIES.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                  Short Description
-                </label>
-                <input
-                  type="text"
-                  value={newProdDesc}
-                  onChange={(e) => setNewProdDesc(e.target.value)}
-                  placeholder="Material, GSM, and printing specification..."
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Subcategory Label
+                    </label>
+                    <input
+                      type="text"
+                      value={newProdSubcat}
+                      onChange={(e) => setNewProdSubcat(e.target.value)}
+                      placeholder="e.g., Custom T-shirts"
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
+                    />
+                  </div>
 
-              <div className="flex items-end gap-2">
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-zinc-950 rounded-lg cursor-pointer"
-                >
-                  Save Product
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowNewProductForm(false)}
-                  className="px-3 py-2 text-xs text-zinc-600 hover:text-zinc-950 cursor-pointer"
-                >
-                  Cancel
-                </button>
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Selling Price (₹ INR) *
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={newProdPrice}
+                      onChange={(e) => setNewProdPrice(Number(e.target.value))}
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Minimum Order Quantity (MOQ)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={newProdMoq}
+                      onChange={(e) => setNewProdMoq(Number(e.target.value))}
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Default Product Type / Shape
+                    </label>
+                    <select
+                      value={newProdShape}
+                      onChange={(e) => setNewProdShape(e.target.value as MockupShape)}
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
+                    >
+                      {[
+                        'tshirt',
+                        'polo',
+                        'hoodie',
+                        'jersey',
+                        'cap',
+                        'apron',
+                        'totebag',
+                        'jutebag',
+                        'schoolbag',
+                        'badge',
+                        'namebadge',
+                        'deskcalendar',
+                        'wallcalendar',
+                        'mug',
+                        'phonecase',
+                        'visitingcard',
+                        'idcard',
+                        'canvasprint',
+                      ].map((sh) => (
+                        <option key={sh} value={sh}>
+                          {sh}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Estimated Production Time
+                    </label>
+                    <input
+                      type="text"
+                      value={newProdLeadTime}
+                      onChange={(e) => setNewProdLeadTime(e.target.value)}
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Short Description
+                    </label>
+                    <input
+                      type="text"
+                      value={newProdDesc}
+                      onChange={(e) => setNewProdDesc(e.target.value)}
+                      placeholder="Material, GSM, and printing specification..."
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2 flex items-center justify-end gap-2 pt-2 border-t border-zinc-200">
+                    <button
+                      type="button"
+                      onClick={() => setShowNewProductForm(false)}
+                      className="px-4 py-2 text-xs font-semibold text-zinc-600 hover:text-zinc-950 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2.5 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 rounded-xl cursor-pointer"
+                    >
+                      Save & Publish Product
+                    </button>
+                  </div>
+                </div>
               </div>
             </form>
           )}
 
-          {/* Product Table */}
+          {/* Product Table with Photo Column & 1-Click Change Photo */}
           <div className="bg-white border border-zinc-200 rounded-xl overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50 text-[11px] font-mono uppercase text-zinc-500">
-                  <th className="py-3 px-4">Product / SKU</th>
+                  <th className="py-3 px-4">Product Photo</th>
+                  <th className="py-3 px-4">Product Name / SKU</th>
                   <th className="py-3 px-4">Category</th>
                   <th className="py-3 px-4">Base Price (₹)</th>
                   <th className="py-3 px-4">MOQ</th>
@@ -839,13 +971,115 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               <tbody className="divide-y divide-zinc-200 text-xs">
                 {products.map((p) => (
                   <tr key={p.id} className="hover:bg-zinc-50/70">
+                    {/* Photo Thumbnail + Direct 1-Click Change Photo Button */}
                     <td className="py-3 px-4">
-                      <div className="font-semibold text-zinc-950">{p.name}</div>
-                      <div className="text-[11px] font-mono text-zinc-500">{p.sku}</div>
+                      <div className="flex items-center gap-3">
+                        <div className="w-16 h-14 bg-zinc-100 border border-zinc-200 rounded-lg overflow-hidden shrink-0">
+                          <ProductMockup
+                            shape={p.mockupShape}
+                            color={p.colors[0]}
+                            productImageUrl={
+                              editingProduct?.id === p.id
+                                ? editingProduct.imageUrl
+                                : p.imageUrl
+                            }
+                            className="w-full h-full"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="inline-flex items-center justify-center px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer transition-colors whitespace-nowrap">
+                            <span>Change Photo</span>
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp,image/svg+xml"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  const dataUrl = reader.result as string;
+                                  onSaveProducts(
+                                    products.map((item) =>
+                                      item.id === p.id
+                                        ? { ...item, imageUrl: dataUrl }
+                                        : item
+                                    )
+                                  );
+                                  if (editingProduct?.id === p.id) {
+                                    setEditingProduct({
+                                      ...editingProduct,
+                                      imageUrl: dataUrl,
+                                    });
+                                  }
+                                };
+                                reader.readAsDataURL(file);
+                                e.target.value = '';
+                              }}
+                              className="hidden"
+                            />
+                          </label>
+                          {p.imageUrl && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSaveProducts(
+                                  products.map((item) =>
+                                    item.id === p.id
+                                      ? { ...item, imageUrl: undefined }
+                                      : item
+                                  )
+                                )
+                              }
+                              className="text-[10px] text-zinc-500 hover:text-red-600 text-left cursor-pointer"
+                            >
+                              Reset Default Photo
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </td>
+
+                    {/* Product Name & Editable URL when editing */}
+                    <td className="py-3 px-4">
+                      {editingProduct?.id === p.id ? (
+                        <div className="space-y-1.5 min-w-[180px]">
+                          <input
+                            type="text"
+                            value={editingProduct.name}
+                            onChange={(e) =>
+                              setEditingProduct({
+                                ...editingProduct,
+                                name: e.target.value,
+                              })
+                            }
+                            className="w-full px-2 py-1 border border-blue-600 rounded font-semibold"
+                            placeholder="Product Name"
+                          />
+                          <input
+                            type="text"
+                            value={editingProduct.imageUrl || ''}
+                            onChange={(e) =>
+                              setEditingProduct({
+                                ...editingProduct,
+                                imageUrl: e.target.value || undefined,
+                              })
+                            }
+                            className="w-full px-2 py-1 border border-zinc-300 rounded text-[11px] font-mono"
+                            placeholder="Image URL (or use Change Photo)"
+                          />
+                        </div>
+                      ) : (
+                        <>
+                          <div className="font-semibold text-zinc-950">{p.name}</div>
+                          <div className="text-[11px] font-mono text-zinc-500">{p.sku}</div>
+                        </>
+                      )}
+                    </td>
+
                     <td className="py-3 px-4 text-zinc-600">
                       {p.categoryName} · {p.subcategory}
                     </td>
+
                     <td className="py-3 px-4 font-mono font-semibold tabular-nums">
                       {editingProduct?.id === p.id ? (
                         <input
@@ -863,6 +1097,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         `₹${p.basePrice}`
                       )}
                     </td>
+
                     <td className="py-3 px-4 font-mono tabular-nums">
                       {editingProduct?.id === p.id ? (
                         <input
@@ -880,6 +1115,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         p.minOrderQty
                       )}
                     </td>
+
                     <td className="py-3 px-4">
                       <button
                         type="button"
@@ -897,29 +1133,39 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         {p.inStock ? 'In Stock' : 'Out of Stock'}
                       </button>
                     </td>
+
                     <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
                       {editingProduct?.id === p.id ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onSaveProducts(
-                              products.map((item) =>
-                                item.id === editingProduct.id ? editingProduct : item
-                              )
-                            );
-                            setEditingProduct(null);
-                          }}
-                          className="px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 rounded cursor-pointer"
-                        >
-                          Save
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onSaveProducts(
+                                products.map((item) =>
+                                  item.id === editingProduct.id ? editingProduct : item
+                                )
+                              );
+                              setEditingProduct(null);
+                            }}
+                            className="px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 rounded cursor-pointer"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingProduct(null)}
+                            className="px-2 py-1 text-xs text-zinc-500 hover:text-zinc-800 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </>
                       ) : (
                         <button
                           type="button"
                           onClick={() => setEditingProduct(p)}
                           className="px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
                         >
-                          Edit Price/MOQ
+                          Edit Details
                         </button>
                       )}
                       <button

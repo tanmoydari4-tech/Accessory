@@ -10,6 +10,8 @@ import {
   Clock,
   Truck,
   Layers,
+  FileText,
+  X,
 } from 'lucide-react';
 
 interface ProductDetailViewProps {
@@ -44,7 +46,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [uploadedFile, setUploadedFile] = useState<{
     fileName: string;
     fileDataUrl: string;
+    fileType: string;
+    fileSize: string;
   } | null>(null);
+  const [customerRequirementNote, setCustomerRequirementNote] = useState<string>('');
   const [addedFeedback, setAddedFeedback] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -59,6 +64,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     setPreviewSide('Front');
     setQuantity(Math.max(1, product.minOrderQty));
     setUploadedFile(null);
+    setCustomerRequirementNote('');
   }, [product]);
 
   const applicableDiscount = product.bulkTiers.reduce(
@@ -74,11 +80,16 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const handleDirectUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const sizeKb = Math.max(1, Math.round(file.size / 1024));
+    const formattedSize =
+      sizeKb >= 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`;
     const reader = new FileReader();
     reader.onload = () => {
       setUploadedFile({
         fileName: file.name,
         fileDataUrl: reader.result as string,
+        fileType: file.type || file.name.split('.').pop()?.toUpperCase() || 'DOCUMENT',
+        fileSize: formattedSize,
       });
     };
     reader.readAsDataURL(file);
@@ -86,6 +97,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   };
 
   const handleAddProductToCart = () => {
+    const hasUploadOrNote = Boolean(uploadedFile || customerRequirementNote.trim());
     const item: CartItem = {
       id: `cart-${Date.now()}`,
       productId: product.id,
@@ -93,6 +105,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       categoryName: product.categoryName,
       sku: product.sku,
       mockupShape: product.mockupShape,
+      productImageUrl: product.imageUrl,
       selectedColor,
       selectedSize,
       selectedMaterial,
@@ -104,7 +117,17 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       discountPercent: applicableDiscount,
       finalUnitPrice,
       lineTotal: totalAmount,
-      directArtworkUpload: uploadedFile || undefined,
+      directArtworkUpload: hasUploadOrNote
+        ? {
+            fileName: uploadedFile
+              ? uploadedFile.fileName
+              : 'Customer Requirement Note Only',
+            fileDataUrl: uploadedFile ? uploadedFile.fileDataUrl : '',
+            fileType: uploadedFile ? uploadedFile.fileType : 'TEXT_NOTE',
+            fileSize: uploadedFile ? uploadedFile.fileSize : '',
+            notes: customerRequirementNote.trim() || undefined,
+          }
+        : undefined,
     };
     onAddToCart(item);
     setAddedFeedback(true);
@@ -115,6 +138,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     (s) => s.productId === product.id || s.categoryId === product.categoryId
   );
 
+  const isUploadedImage =
+    uploadedFile?.fileDataUrl && uploadedFile.fileDataUrl.startsWith('data:image');
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Breadcrumb Back */}
@@ -124,14 +150,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         className="inline-flex items-center gap-2 text-xs font-medium text-zinc-600 hover:text-zinc-950 mb-6 cursor-pointer"
       >
         <ArrowLeft className="w-4 h-4" />
-        Back to Catalog
+        Back to Shopping Catalog
       </button>
 
       {/* Contiguous 2-Column Purchase Module */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
-        {/* LEFT 6 COLS: Sticky Product Studio Preview & Front/Back Toggle */}
+        {/* LEFT 6 COLS: Sticky Product Picture Preview & Front/Back Toggle */}
         <div className="lg:col-span-6 lg:sticky lg:top-20 space-y-4">
-          <div className="aspect-square bg-zinc-100/80 border border-zinc-200 rounded-2xl relative flex items-center justify-center p-6 overflow-hidden">
+          <div className="aspect-square bg-zinc-100 border border-zinc-200 rounded-2xl relative flex items-center justify-center overflow-hidden">
             <ProductMockup
               shape={product.mockupShape}
               color={selectedColor}
@@ -139,8 +165,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               graphicText={product.defaultGraphicText}
               graphicSubtext={product.defaultGraphicSubtext}
               accentColor={product.defaultAccentColor}
-              customPreviewUrl={uploadedFile?.fileDataUrl}
-              className="w-full h-full max-w-[400px]"
+              productImageUrl={product.imageUrl}
+              customPreviewUrl={isUploadedImage ? uploadedFile.fileDataUrl : undefined}
+              className="w-full h-full"
             />
 
             {/* Front / Back Switcher */}
@@ -184,7 +211,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                     onClick={() => onOpenInStudio(product, smp)}
                     className="group bg-white border border-zinc-200 hover:border-blue-600 rounded-lg p-2 text-left transition-colors cursor-pointer"
                   >
-                    <div className="aspect-square bg-zinc-50 rounded mb-1.5">
+                    <div className="aspect-square bg-zinc-50 rounded mb-1.5 overflow-hidden">
                       <ProductMockup
                         shape={smp.mockupShape}
                         color={smp.productColor}
@@ -202,7 +229,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           )}
         </div>
 
-        {/* RIGHT 6 COLS: Purchase Module, Options & Bulk Calculator */}
+        {/* RIGHT 6 COLS: Purchase Module, Options, Document Upload & Bulk Calculator */}
         <div className="lg:col-span-6 space-y-6">
           <div>
             {/* Zero-Pill Unboxed Metadata */}
@@ -241,7 +268,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             <div className="text-xs font-semibold text-zinc-800 mb-2.5 flex items-center justify-between">
               <span>Quantity-Based Bulk Pricing Tiers</span>
               <span className="font-mono text-[11px] text-blue-600">
-                Configurable via Admin Panel
+                Click any tier to apply
               </span>
             </div>
             <div className="grid grid-cols-5 gap-2 text-center text-xs">
@@ -430,58 +457,117 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             </div>
           </div>
 
-          {/* Primary Action Buttons: Customize in Studio + Upload Artwork + Add to Cart */}
-          <div className="pt-4 border-t border-zinc-200 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => onOpenInStudio(product)}
-                className="py-3 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
-              >
-                <Sliders className="w-4 h-4" />
-                Customize in Design Studio
-              </button>
+          {/* CUSTOMER DOCUMENT / PICTURE UPLOAD & CUSTOM PRINTING RECOMMENDATION BOX */}
+          <div className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-blue-600" />
+                <span className="text-xs font-bold text-zinc-950">
+                  Upload Your Document / Picture & Custom Printing Requirement
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-blue-700">
+                PDF, DOC, DOCX, XLS, JPG, PNG, CDR, ZIP
+              </span>
+            </div>
 
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.webp,.svg,.zip,.cdr,.ai,.psd"
+              onChange={handleDirectUpload}
+              className="hidden"
+            />
+
+            {uploadedFile ? (
+              <div className="flex items-center justify-between gap-3 bg-white border border-emerald-300 rounded-xl p-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-emerald-800 truncate">
+                    ✓ Attached File: {uploadedFile.fileName}
+                  </div>
+                  <div className="text-[11px] font-mono text-zinc-500">
+                    Size: {uploadedFile.fileSize} · Format: {uploadedFile.fileType}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-2.5 py-1 text-[11px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg cursor-pointer"
+                  >
+                    Change File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUploadedFile(null)}
+                    className="p-1 text-zinc-400 hover:text-red-600 cursor-pointer"
+                    title="Remove file"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ) : (
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="py-3 px-4 text-xs font-semibold text-zinc-900 bg-zinc-100 hover:bg-zinc-200 border border-zinc-300 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full py-3 px-4 text-xs font-semibold text-zinc-900 bg-white hover:bg-zinc-50 border border-dashed border-blue-400 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
                 <Upload className="w-4 h-4 text-blue-600" />
-                {uploadedFile ? `Uploaded: ${uploadedFile.fileName.slice(0, 16)}` : 'Upload Print-Ready Design'}
+                <span>Click to Upload Document, Design File, or Photo (PDF, Word, Excel, Image, ZIP)</span>
               </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={handleDirectUpload}
-                className="hidden"
+            )}
+
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                Your Custom Recommendation / Printing Instructions (Optional):
+              </label>
+              <textarea
+                rows={2}
+                value={customerRequirementNote}
+                onChange={(e) => setCustomerRequirementNote(e.target.value)}
+                placeholder="Describe how you want your product printed (e.g., Front chest logo, back name & number, spiral binding, lamination type, special font/color)..."
+                className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-xl focus:outline-none focus:border-blue-600"
               />
             </div>
+          </div>
 
-            <button
-              type="button"
-              disabled={!product.inStock}
-              onClick={handleAddProductToCart}
-              className="w-full py-3.5 px-5 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 disabled:bg-zinc-300 rounded-xl flex items-center justify-center justify-between transition-colors cursor-pointer"
-            >
-              <span className="flex items-center gap-2">
-                {addedFeedback ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-400" />
-                    Added to Shopping Cart!
-                  </>
-                ) : (
-                  <>
-                    <ShoppingBag className="w-4 h-4" />
-                    Add {quantity} Unit(s) to Shopping Cart
-                  </>
-                )}
-              </span>
-              <span className="font-mono text-sm font-bold tabular-nums">
-                ₹{totalAmount.toLocaleString('en-IN')}
-              </span>
-            </button>
+          {/* Primary Action Buttons: Customize in Studio + Add to Cart */}
+          <div className="pt-2 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={handleAddProductToCart}
+                disabled={!product.inStock}
+                className="py-3.5 px-5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-300 rounded-xl flex items-center justify-between transition-colors cursor-pointer shadow-xs"
+              >
+                <span className="flex items-center gap-2">
+                  {addedFeedback ? (
+                    <>
+                      <Check className="w-4 h-4 text-white" />
+                      Added to Cart!
+                    </>
+                  ) : (
+                    <>
+                      <ShoppingBag className="w-4 h-4" />
+                      Add {quantity} to Cart
+                    </>
+                  )}
+                </span>
+                <span className="font-mono text-sm font-bold tabular-nums">
+                  ₹{totalAmount.toLocaleString('en-IN')}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onOpenInStudio(product)}
+                className="py-3.5 px-4 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <Sliders className="w-4 h-4 text-blue-400" />
+                Open in Live Design Studio
+              </button>
+            </div>
           </div>
 
           {/* Production & Delivery Estimates */}
@@ -503,7 +589,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-blue-600 shrink-0" />
               <span>
-                Pre-press digital artwork proof available before bulk production begins.
+                Pre-press digital artwork & document verification before bulk production begins.
               </span>
             </div>
           </div>
@@ -521,14 +607,15 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               <div
                 key={rel.id}
                 onClick={() => onSelectProduct(rel)}
-                className="group bg-white border border-zinc-200 hover:border-zinc-900 rounded-xl p-4 cursor-pointer transition-all"
+                className="group bg-white border border-zinc-200 hover:border-blue-600 rounded-xl p-4 cursor-pointer transition-all"
               >
-                <div className="aspect-square bg-zinc-50 rounded-lg mb-3">
+                <div className="aspect-4/3 bg-zinc-100 rounded-lg mb-3 overflow-hidden">
                   <ProductMockup
                     shape={rel.mockupShape}
                     color={rel.colors[0]}
                     graphicText={rel.defaultGraphicText}
                     graphicSubtext={rel.defaultGraphicSubtext}
+                    productImageUrl={rel.imageUrl}
                     className="w-full h-full"
                   />
                 </div>

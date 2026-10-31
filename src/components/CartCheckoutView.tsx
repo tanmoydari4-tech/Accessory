@@ -20,6 +20,8 @@ import {
   AlertCircle,
   Printer,
   ShoppingBag,
+  Upload,
+  FileText,
 } from 'lucide-react';
 
 interface CartCheckoutViewProps {
@@ -28,10 +30,15 @@ interface CartCheckoutViewProps {
   settings: StoreSettings;
   currentUser: UserProfile | null;
   onUpdateQuantity: (cartItemId: string, nextQty: number) => void;
+  onUpdateItemAttachment?: (
+    cartItemId: string,
+    directArtworkUpload: CartItem['directArtworkUpload']
+  ) => void;
   onRemoveItem: (cartItemId: string) => void;
   onPlaceOrder: (order: Order, saveAddressToProfile: boolean) => void;
   onNavigate: (page: PageId) => void;
   onOpenWhatsAppModal: (prefillMessage: string) => void;
+  onGoogleLogin?: () => void;
 }
 
 export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
@@ -39,10 +46,12 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
   settings,
   currentUser,
   onUpdateQuantity,
+  onUpdateItemAttachment,
   onRemoveItem,
   onPlaceOrder,
   onNavigate,
   onOpenWhatsAppModal,
+  onGoogleLogin,
 }) => {
   // Address fields
   const defaultAddr = currentUser?.savedAddresses?.[0];
@@ -58,6 +67,21 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
     defaultAddr?.deliveryInstructions || ''
   );
   const [saveAddress, setSaveAddress] = useState(true);
+
+  const isLoggedIn = Boolean(currentUser && !currentUser.uid.startsWith('guest-'));
+
+  // Sync user details when user signs in
+  React.useEffect(() => {
+    if (currentUser && !currentUser.uid.startsWith('guest-')) {
+      const addr = currentUser.savedAddresses?.[0];
+      if (!fullName) setFullName(addr?.fullName || currentUser.name || '');
+      if (!phone) setPhone(addr?.phone || currentUser.phone || '');
+      if (!email) setEmail(addr?.email || currentUser.email || '');
+      if (!addressLine1 && addr?.addressLine1) setAddressLine1(addr.addressLine1);
+      if (!district && addr?.district) setDistrict(addr.district);
+      if (!pinCode && addr?.pinCode) setPinCode(addr.pinCode);
+    }
+  }, [currentUser]);
 
   // Payment state
   const [paymentMethod, setPaymentMethod] = useState<'COD' | 'UPI' | 'ONLINE_GATEWAY'>(
@@ -124,6 +148,15 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
 
     if (cart.length === 0) return;
 
+    // Strict Login Requirement before placing an order
+    if (!isLoggedIn || !currentUser) {
+      setFormError(
+        'Sign In Required: Please Sign In or Create a Customer Account first before placing an order.'
+      );
+      onNavigate('auth');
+      return;
+    }
+
     if (!fullName.trim() || fullName.trim().length < 2) {
       setFormError('Please enter the recipient full name.');
       return;
@@ -177,7 +210,7 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
     const newOrder: Order = {
       id: `ord-${Date.now()}`,
       orderNumber: orderNum,
-      customerId: currentUser?.uid || 'guest-customer',
+      customerId: currentUser.uid,
       customerName: fullName.trim(),
       customerEmail: email.trim(),
       customerPhone: phone.trim(),
@@ -317,11 +350,17 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
                 className="flex items-center justify-between gap-4 p-3 border border-zinc-200 rounded-xl"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-14 h-14 bg-zinc-50 rounded-lg border border-zinc-200 shrink-0">
+                  <div className="w-14 h-14 bg-zinc-50 rounded-lg border border-zinc-200 shrink-0 overflow-hidden">
                     <ProductMockup
                       shape={item.mockupShape}
                       color={item.selectedColor}
-                      customPreviewUrl={item.customDesign?.frontPreviewDataUrl}
+                      productImageUrl={item.productImageUrl}
+                      customPreviewUrl={
+                        item.customDesign?.frontPreviewDataUrl ||
+                        (item.directArtworkUpload?.fileDataUrl?.startsWith('data:image')
+                          ? item.directArtworkUpload.fileDataUrl
+                          : undefined)
+                      }
                       className="w-full h-full"
                     />
                   </div>
@@ -331,6 +370,16 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
                       {item.selectedColor.name} · {item.selectedSize} · {item.printSide} ·{' '}
                       {item.printingMethod}
                     </div>
+                    {item.directArtworkUpload?.fileDataUrl && (
+                      <div className="text-[11px] font-mono text-emerald-700 font-semibold mt-0.5">
+                        ✓ Attached Document: {item.directArtworkUpload.fileName}
+                      </div>
+                    )}
+                    {item.directArtworkUpload?.notes && (
+                      <div className="text-[11px] text-zinc-600 mt-0.5">
+                        <strong>Customer Requirement:</strong> {item.directArtworkUpload.notes}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="text-right font-mono text-xs">
@@ -382,16 +431,74 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
     );
   }
 
+  if (!isLoggedIn || !currentUser) {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-16 text-center">
+        <div className="bg-white border-2 border-blue-600 rounded-2xl p-8 sm:p-10 space-y-4 shadow-xs">
+          <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 mx-auto">
+            <Lock className="w-7 h-7" />
+          </div>
+          <h1 className="text-2xl font-display font-bold text-zinc-950">
+            Sign In Required to View & Add to Cart
+          </h1>
+          <p className="text-xs sm:text-sm text-zinc-600 max-w-md mx-auto">
+            Your shopping cart is always blank when signed out. Please Sign In with your Google Account or User ID so only your own personal cart items are shown.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-3">
+            {onGoogleLogin && (
+              <button
+                type="button"
+                onClick={onGoogleLogin}
+                className="px-5 py-3 text-xs font-semibold text-zinc-900 bg-white hover:bg-zinc-50 border-2 border-zinc-300 hover:border-blue-600 rounded-xl shadow-xs cursor-pointer inline-flex items-center gap-2.5 transition-all"
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="#4285F4"
+                    d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.13-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"
+                  />
+                </svg>
+                <span>Sign in with Google</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigate('auth')}
+              className="px-6 py-3 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl cursor-pointer inline-flex items-center gap-2"
+            >
+              <Lock className="w-4 h-4" />
+              <span>Sign In / Register with Email</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (cart.length === 0) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-10 space-y-4">
           <ShoppingBag className="w-10 h-10 text-zinc-400 mx-auto" />
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 border border-blue-200 rounded-md text-xs font-mono text-blue-700">
+            Account ID: {currentUser.email} ({currentUser.name})
+          </div>
           <h1 className="text-2xl font-display font-bold text-zinc-950">
-            Your PrintZone Shopping Bag is Empty
+            Your Personal Shopping Cart is Empty
           </h1>
           <p className="text-sm text-zinc-600">
-            Browse our 7 custom printing categories or launch the interactive Konva.js Online Design Studio to create personalized merchandise.
+            Browse our 7 custom printing categories or launch the Online Design Studio to add products to your account ({currentUser.email}).
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
             <button
@@ -399,7 +506,7 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
               onClick={() => onNavigate('all-products')}
               className="px-5 py-2.5 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 rounded-lg cursor-pointer"
             >
-              Explore All 46 Products
+              Explore All Products
             </button>
             <button
               type="button"
@@ -418,8 +525,8 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="pb-6 border-b border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-mono text-blue-600 uppercase">
-            Pan-India Custom Print Fulfillment
+          <span className="text-xs font-mono text-emerald-700 font-semibold uppercase">
+            Cart Account ID: {currentUser.email} ({currentUser.name})
           </span>
           <h1 className="text-2xl sm:text-3xl font-display font-bold text-zinc-950 mt-1">
             Shopping Cart & Secure Checkout
@@ -451,81 +558,230 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
             {cart.map((item) => (
               <div
                 key={item.id}
-                className="bg-white border border-zinc-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                className="bg-white border border-zinc-200 rounded-xl p-4 space-y-3"
               >
-                <div className="flex items-start gap-4">
-                  <div className="w-20 h-20 bg-zinc-50 border border-zinc-200 rounded-lg shrink-0 overflow-hidden">
-                    <ProductMockup
-                      shape={item.mockupShape}
-                      color={item.selectedColor}
-                      customPreviewUrl={item.customDesign?.frontPreviewDataUrl}
-                      className="w-full h-full"
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-4">
+                    <div className="w-20 h-20 bg-zinc-50 border border-zinc-200 rounded-lg shrink-0 overflow-hidden">
+                      <ProductMockup
+                        shape={item.mockupShape}
+                        color={item.selectedColor}
+                        productImageUrl={item.productImageUrl}
+                        customPreviewUrl={
+                          item.customDesign?.frontPreviewDataUrl ||
+                          (item.directArtworkUpload?.fileDataUrl?.startsWith('data:image')
+                            ? item.directArtworkUpload.fileDataUrl
+                            : undefined)
+                        }
+                        className="w-full h-full"
+                      />
+                    </div>
+                    <div className="space-y-1 text-xs">
+                      <div className="font-bold text-sm text-zinc-950">{item.productName}</div>
+                      <div className="text-zinc-600">
+                        Color: <strong>{item.selectedColor.name}</strong> · Size:{' '}
+                        <strong>{item.selectedSize}</strong> · Print: <strong>{item.printSide}</strong>
+                      </div>
+                      <div className="text-zinc-500">
+                        Material: {item.selectedMaterial} · Method: {item.printingMethod}
+                      </div>
+                      {item.customDesign && (
+                        <div className="text-[11px] font-mono text-blue-600">
+                          Design: "{item.customDesign.designName}" (Attached for Pre-Press)
+                        </div>
+                      )}
+                      {item.directArtworkUpload?.fileDataUrl && (
+                        <div className="text-[11px] font-mono text-emerald-700 font-semibold">
+                          ✓ Uploaded File: {item.directArtworkUpload.fileName}{' '}
+                          {item.directArtworkUpload.fileSize
+                            ? `(${item.directArtworkUpload.fileSize})`
+                            : ''}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex sm:flex-col items-center sm:items-end justify-between gap-3 pt-3 sm:pt-0 border-t sm:border-t-0 border-zinc-100">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onUpdateQuantity(item.id, Math.max(1, item.quantity - 1))}
+                        className="w-7 h-7 flex items-center justify-center border border-zinc-300 rounded text-xs font-bold hover:bg-zinc-50 cursor-pointer"
+                      >
+                        -
+                      </button>
+                      <span className="w-10 text-center font-mono text-xs font-semibold tabular-nums">
+                        {item.quantity}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
+                        className="w-7 h-7 flex items-center justify-center border border-zinc-300 rounded text-xs font-bold hover:bg-zinc-50 cursor-pointer"
+                      >
+                        +
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveItem(item.id)}
+                        className="ml-2 p-1.5 text-zinc-400 hover:text-red-600 cursor-pointer"
+                        title="Remove item"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="text-right font-mono">
+                      <div className="text-[11px] text-zinc-500 tabular-nums">
+                        ₹{item.finalUnitPrice}/unit{' '}
+                        {item.discountPercent > 0 && `(-${item.discountPercent}%)`}
+                      </div>
+                      <div className="text-sm font-bold text-zinc-950 tabular-nums">
+                        ₹{item.lineTotal.toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Inline Customer Document Upload & Custom Recommendation Box per Cart Item */}
+                {onUpdateItemAttachment && (
+                  <div className="pt-3 border-t border-zinc-100 bg-zinc-50/80 rounded-xl p-3 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-zinc-800 flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-blue-600" />
+                        Upload Document / Photo & Custom Requirement for this Item:
+                      </span>
+                      <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 rounded-lg cursor-pointer transition-colors">
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>
+                          {item.directArtworkUpload?.fileDataUrl
+                            ? 'Change Document / Photo'
+                            : 'Upload Document / Photo (PDF, DOC, JPG, PNG, ZIP)'}
+                        </span>
+                        <input
+                          type="file"
+                          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.webp,.svg,.zip,.cdr,.ai,.psd"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const sizeKb = Math.max(1, Math.round(file.size / 1024));
+                            const formattedSize =
+                              sizeKb >= 1024
+                                ? `${(sizeKb / 1024).toFixed(1)} MB`
+                                : `${sizeKb} KB`;
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              onUpdateItemAttachment(item.id, {
+                                fileName: file.name,
+                                fileDataUrl: reader.result as string,
+                                fileType:
+                                  file.type ||
+                                  file.name.split('.').pop()?.toUpperCase() ||
+                                  'DOCUMENT',
+                                fileSize: formattedSize,
+                                notes: item.directArtworkUpload?.notes,
+                              });
+                            };
+                            reader.readAsDataURL(file);
+                            e.target.value = '';
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+
+                    <input
+                      type="text"
+                      value={item.directArtworkUpload?.notes || ''}
+                      onChange={(e) => {
+                        const nextNote = e.target.value;
+                        onUpdateItemAttachment(item.id, {
+                          fileName:
+                            item.directArtworkUpload?.fileName ||
+                            'Customer Requirement Note Only',
+                          fileDataUrl: item.directArtworkUpload?.fileDataUrl || '',
+                          fileType: item.directArtworkUpload?.fileType || 'TEXT_NOTE',
+                          fileSize: item.directArtworkUpload?.fileSize || '',
+                          notes: nextNote,
+                        });
+                      }}
+                      placeholder="Write your custom recommendation (e.g., Front logo size, back text, paper GSM, binding style)..."
+                      className="w-full px-3 py-2 text-xs bg-white border border-zinc-300 rounded-lg focus:outline-none focus:border-blue-600"
                     />
                   </div>
-                  <div className="space-y-1 text-xs">
-                    <div className="font-bold text-sm text-zinc-950">{item.productName}</div>
-                    <div className="text-zinc-600">
-                      Color: <strong>{item.selectedColor.name}</strong> · Size:{' '}
-                      <strong>{item.selectedSize}</strong> · Print: <strong>{item.printSide}</strong>
-                    </div>
-                    <div className="text-zinc-500">
-                      Material: {item.selectedMaterial} · Method: {item.printingMethod}
-                    </div>
-                    {item.customDesign && (
-                      <div className="text-[11px] font-mono text-blue-600">
-                        Design: "{item.customDesign.designName}" (Attached for Pre-Press)
-                      </div>
-                    )}
-                    {item.directArtworkUpload && (
-                      <div className="text-[11px] font-mono text-emerald-700">
-                        Uploaded File: {item.directArtworkUpload.fileName}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex sm:flex-col items-center sm:items-end justify-between gap-3 pt-3 sm:pt-0 border-t sm:border-t-0 border-zinc-100">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => onUpdateQuantity(item.id, Math.max(1, item.quantity - 1))}
-                      className="w-7 h-7 flex items-center justify-center border border-zinc-300 rounded text-xs font-bold hover:bg-zinc-50 cursor-pointer"
-                    >
-                      -
-                    </button>
-                    <span className="w-10 text-center font-mono text-xs font-semibold tabular-nums">
-                      {item.quantity}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
-                      className="w-7 h-7 flex items-center justify-center border border-zinc-300 rounded text-xs font-bold hover:bg-zinc-50 cursor-pointer"
-                    >
-                      +
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveItem(item.id)}
-                      className="ml-2 p-1.5 text-zinc-400 hover:text-red-600 cursor-pointer"
-                      title="Remove item"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  <div className="text-right font-mono">
-                    <div className="text-[11px] text-zinc-500 tabular-nums">
-                      ₹{item.finalUnitPrice}/unit{' '}
-                      {item.discountPercent > 0 && `(-${item.discountPercent}%)`}
-                    </div>
-                    <div className="text-sm font-bold text-zinc-950 tabular-nums">
-                      ₹{item.lineTotal.toLocaleString('en-IN')}
-                    </div>
-                  </div>
-                </div>
+                )}
               </div>
             ))}
           </div>
+
+          {/* CUSTOMER SIGN-IN GATE OR LOGGED-IN ACCOUNT VERIFICATION */}
+          {!isLoggedIn ? (
+            <div className="bg-blue-50/90 border-2 border-blue-600 rounded-2xl p-6 space-y-3">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs font-mono font-bold text-blue-700 uppercase">
+                    Account Sign-In Required Before Ordering
+                  </div>
+                  <h2 className="text-lg font-display font-bold text-zinc-950">
+                    Please Sign In or Create an Account to Place Your Order
+                  </h2>
+                  <p className="text-xs text-zinc-600">
+                    To place an order and track your custom printing status, you must first sign in with your account. Your shopping cart items and uploaded documents will remain saved.
+                  </p>
+                </div>
+              </div>
+              <div className="pt-2 flex flex-wrap items-center gap-3">
+                {onGoogleLogin && (
+                  <button
+                    type="button"
+                    onClick={onGoogleLogin}
+                    className="px-5 py-3 text-xs font-semibold text-zinc-900 bg-white hover:bg-zinc-50 border-2 border-zinc-300 hover:border-blue-600 rounded-xl shadow-xs cursor-pointer inline-flex items-center gap-2.5 transition-all"
+                  >
+                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        fill="#4285F4"
+                        d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.13-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"
+                      />
+                      <path
+                        fill="#EA4335"
+                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"
+                      />
+                    </svg>
+                    <span>Sign in with Google</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => onNavigate('auth')}
+                  className="px-6 py-3 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs cursor-pointer inline-flex items-center gap-2 transition-colors"
+                >
+                  <Lock className="w-4 h-4" />
+                  <span>Sign In / Register with Email</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  Signed in as <strong>{currentUser?.name}</strong> ({currentUser?.email}) — Ready to place order
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Indian Delivery Address Form */}
           <form
@@ -905,18 +1161,40 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
               </div>
             )}
 
-            <button
-              type="submit"
-              form="checkout-form"
-              className="w-full py-3.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <span>
-                {paymentMethod === 'COD'
-                  ? `Confirm COD Order · ₹${grandTotal.toLocaleString('en-IN')}`
-                  : `Complete Verified Order · ₹${grandTotal.toLocaleString('en-IN')}`}
-              </span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
+            {!isLoggedIn ? (
+              <div className="space-y-2.5">
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span>
+                    You must <strong>Sign In / Log In</strong> first before you can confirm your order.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('auth')}
+                  className="w-full py-3.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Lock className="w-4 h-4" />
+                  <span>
+                    Sign In / Login First to Place Order · ₹{grandTotal.toLocaleString('en-IN')}
+                  </span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="submit"
+                form="checkout-form"
+                className="w-full py-3.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>
+                  {paymentMethod === 'COD'
+                    ? `Confirm COD Order · ₹${grandTotal.toLocaleString('en-IN')}`
+                    : `Complete Verified Order · ₹${grandTotal.toLocaleString('en-IN')}`}
+                </span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
       </div>

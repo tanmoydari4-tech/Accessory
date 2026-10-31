@@ -516,7 +516,8 @@ export const AuthView: React.FC<{
   onLoginSuccess: (user: UserProfile) => void;
   onGoogleLogin: () => Promise<void>;
   authError: string | null;
-}> = ({ onLoginSuccess, onGoogleLogin, authError }) => {
+  requireLoginForOrderNotice?: boolean;
+}> = ({ onLoginSuccess, onGoogleLogin, authError, requireLoginForOrderNotice }) => {
   const [isRegister, setIsRegister] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -655,6 +656,18 @@ export const AuthView: React.FC<{
   return (
     <div className="max-w-md mx-auto px-4 py-12">
       <div className="bg-white border border-zinc-200 rounded-2xl p-6 sm:p-8 space-y-5 shadow-xs">
+        {requireLoginForOrderNotice && (
+          <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-950 space-y-1">
+            <div className="font-bold text-blue-700 flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5" />
+              Sign In Required to Use Cart & Place Order
+            </div>
+            <p className="text-[11px] text-blue-900">
+              Please <strong>Sign In with Google</strong> or <strong>your User ID / Email</strong> below first to add products to your personal cart and place orders.
+            </p>
+          </div>
+        )}
+
         <div>
           <div className="text-xs font-mono text-blue-600 uppercase flex items-center gap-1.5">
             <Lock className="w-3.5 h-3.5" />
@@ -665,9 +678,46 @@ export const AuthView: React.FC<{
           </h1>
           <p className="text-xs text-zinc-500 mt-1">
             {isRegister
-              ? 'Register with your name, mobile number, and email to save custom designs and track orders.'
-              : 'Sign in with your registered email address and password.'}
+              ? 'Sign in with Google in 1 click or register with your mobile number and email.'
+              : 'Sign in quickly with your Google account or registered email and password.'}
           </p>
+        </div>
+
+        {/* Prominent 1-Click Google Sign-In Button */}
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={onGoogleLogin}
+            className="w-full py-3 px-4 text-xs sm:text-sm font-semibold text-zinc-900 bg-white hover:bg-zinc-50 border-2 border-zinc-300 hover:border-blue-600 rounded-xl cursor-pointer transition-all flex items-center justify-center gap-3 shadow-xs"
+          >
+            <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="#4285F4"
+                d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"
+              />
+              <path
+                fill="#34A853"
+                d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"
+              />
+              <path
+                fill="#FBBC05"
+                d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.13-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"
+              />
+              <path
+                fill="#EA4335"
+                d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"
+              />
+            </svg>
+            <span>Continue with Google (Google দিয়ে Sign In)</span>
+          </button>
+
+          <div className="relative flex items-center justify-center py-1">
+            <div className="border-t border-zinc-200 w-full" />
+            <span className="bg-white px-3 text-[10px] font-mono uppercase text-zinc-400 whitespace-nowrap">
+              Or use Email & Password
+            </span>
+            <div className="border-t border-zinc-200 w-full" />
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -746,19 +796,11 @@ export const AuthView: React.FC<{
               ? 'Authenticating...'
               : isRegister
               ? 'Create Account'
-              : 'Sign In'}
+              : 'Sign In with Email'}
           </button>
         </form>
 
-        <div className="pt-4 border-t border-zinc-200 space-y-3">
-          <button
-            type="button"
-            onClick={onGoogleLogin}
-            className="w-full py-2.5 px-4 text-xs font-semibold text-zinc-900 bg-zinc-100 hover:bg-zinc-200 rounded-lg cursor-pointer transition-colors"
-          >
-            Continue with Google
-          </button>
-
+        <div className="pt-3 border-t border-zinc-200">
           <button
             type="button"
             onClick={() => {

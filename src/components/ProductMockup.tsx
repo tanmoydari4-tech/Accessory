@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { CanvasElementData, MockupShape, ProductColor } from '../types';
 
 interface ProductMockupProps {
   shape: MockupShape;
   color: ProductColor;
+  productImageUrl?: string;
   side?: 'Front' | 'Back';
   graphicText?: string;
   graphicSubtext?: string;
@@ -14,6 +15,35 @@ interface ProductMockupProps {
   hidePrintOverlay?: boolean;
   showPrintGuide?: boolean;
 }
+
+export const SHAPE_PHOTO_MAP: Record<MockupShape, string> = {
+  tshirt: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=800&q=80',
+  polo: 'https://images.unsplash.com/photo-1586363104862-3a5e2ab60d99?auto=format&fit=crop&w=800&q=80',
+  hoodie: 'https://images.unsplash.com/photo-1556821840-3a63f95609a7?auto=format&fit=crop&w=800&q=80',
+  jersey: 'https://images.unsplash.com/photo-1580087433295-ab2600c1030e?auto=format&fit=crop&w=800&q=80',
+  cap: 'https://images.unsplash.com/photo-1588850561407-ed78c282e89b?auto=format&fit=crop&w=800&q=80',
+  apron: 'https://images.unsplash.com/photo-1590736969955-71cc94801759?auto=format&fit=crop&w=800&q=80',
+  totebag: 'https://images.unsplash.com/photo-1597484661643-2f5fef640dd1?auto=format&fit=crop&w=800&q=80',
+  jutebag: 'https://images.unsplash.com/photo-1544816155-12df9643f363?auto=format&fit=crop&w=800&q=80',
+  schoolbag: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&w=800&q=80',
+  badge: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80',
+  namebadge: 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=800&q=80',
+  wallcalendar: 'https://images.unsplash.com/photo-1506784365847-bbad939e9335?auto=format&fit=crop&w=800&q=80',
+  deskcalendar: 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&w=800&q=80',
+  mug: 'https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?auto=format&fit=crop&w=800&q=80',
+  keychain: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80',
+  mousepad: 'https://images.unsplash.com/photo-1615663245857-ac93bb7c39e7?auto=format&fit=crop&w=800&q=80',
+  phonecase: 'https://images.unsplash.com/photo-1601593346740-925612772716?auto=format&fit=crop&w=800&q=80',
+  cushion: 'https://images.unsplash.com/photo-1584100936595-c0654b55a2e2?auto=format&fit=crop&w=800&q=80',
+  frame: 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&w=800&q=80',
+  sticker: 'https://images.unsplash.com/photo-1572375992501-4b0892d50c69?auto=format&fit=crop&w=800&q=80',
+  poster: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80',
+  visitingcard: 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=800&q=80',
+  flyer: 'https://images.unsplash.com/photo-1586075010923-2dd4570fb338?auto=format&fit=crop&w=800&q=80',
+  certificate: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?auto=format&fit=crop&w=800&q=80',
+  idcard: 'https://images.unsplash.com/photo-1544717305-2782549b5136?auto=format&fit=crop&w=800&q=80',
+  canvasprint: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=800&q=80',
+};
 
 export function getPrintZoneGeometry(shape: MockupShape): {
   topPercent: number;
@@ -58,6 +88,7 @@ export function getPrintZoneGeometry(shape: MockupShape): {
 export const ProductMockup: React.FC<ProductMockupProps> = ({
   shape,
   color,
+  productImageUrl,
   side = 'Front',
   graphicText = 'PRINTZONE',
   graphicSubtext = 'CUSTOM STUDIO',
@@ -68,6 +99,7 @@ export const ProductMockup: React.FC<ProductMockupProps> = ({
   hidePrintOverlay = false,
   showPrintGuide = false,
 }) => {
+  const [imgFailed, setImgFailed] = useState(false);
   const fillHex = color?.hex || '#141417';
   const isLightProduct =
     fillHex.toLowerCase() === '#f8fafc' ||
@@ -77,6 +109,7 @@ export const ProductMockup: React.FC<ProductMockupProps> = ({
   const strokeHex = isLightProduct ? '#CBD5E1' : '#334155';
   const textPrimary = isLightProduct ? '#09090B' : '#FFFFFF';
   const printZone = getPrintZoneGeometry(shape);
+  const resolvedPhotoUrl = productImageUrl || SHAPE_PHOTO_MAP[shape] || SHAPE_PHOTO_MAP.tshirt;
 
   const renderShapeSvg = () => {
     switch (shape) {
@@ -437,14 +470,43 @@ export const ProductMockup: React.FC<ProductMockupProps> = ({
   };
 
   return (
-    <div className={`relative select-none flex items-center justify-center overflow-hidden ${className}`}>
-      {/* Base Product Vector Silhouette */}
-      <div className="w-full h-full flex items-center justify-center p-3">
-        {renderShapeSvg()}
-      </div>
+    <div
+      className={`relative select-none flex items-center justify-center overflow-hidden rounded-xl ${className}`}
+    >
+      {/* Real Photographic Picture Format (<picture> + <img>) with automatic fallback */}
+      {!imgFailed && !hidePrintOverlay ? (
+        <picture className="w-full h-full block relative">
+          <source srcSet={resolvedPhotoUrl} type="image/jpeg" />
+          <img
+            src={resolvedPhotoUrl}
+            alt={graphicText || shape}
+            referrerPolicy="no-referrer"
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+            className="w-full h-full object-cover rounded-xl"
+          />
+          {/* Selected Color Swatch Tint Indicator Badge */}
+          {color && (
+            <span
+              title={`Selected Color: ${color.name}`}
+              className="absolute bottom-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/70 backdrop-blur-xs text-[9px] font-mono text-white"
+            >
+              <span
+                style={{ backgroundColor: fillHex }}
+                className="w-2.5 h-2.5 rounded-full border border-white/60 inline-block"
+              />
+              {color.name}
+            </span>
+          )}
+        </picture>
+      ) : (
+        <div className="w-full h-full flex items-center justify-center p-3">
+          {renderShapeSvg()}
+        </div>
+      )}
 
-      {/* Printable Zone Overlay */}
-      {!hidePrintOverlay && (
+      {/* Printable Zone Overlay (Shown when custom design/photo is uploaded or in customizer) */}
+      {!hidePrintOverlay && (customPreviewUrl || (elements && elements.length > 0) || showPrintGuide) && (
         <div
           style={{
             top: `${printZone.topPercent}%`,
@@ -461,17 +523,17 @@ export const ProductMockup: React.FC<ProductMockupProps> = ({
               src={customPreviewUrl}
               alt="Custom Design Preview"
               referrerPolicy="no-referrer"
-              className="w-full h-full object-contain"
+              className="w-full h-full object-contain drop-shadow-md bg-white/85 p-1 rounded"
             />
           ) : elements && elements.length > 0 ? (
-            <div className="w-full h-full flex flex-col items-center justify-center p-1.5">
+            <div className="w-full h-full flex flex-col items-center justify-center p-1.5 bg-black/40 backdrop-blur-2xs rounded">
               {elements
                 .filter((el) => el.type === 'text')
                 .map((el) => (
                   <div
                     key={el.id}
                     style={{
-                      color: el.fill || textPrimary,
+                      color: el.fill || '#FFFFFF',
                       fontFamily: el.fontFamily || 'Plus Jakarta Sans',
                     }}
                     className="font-bold leading-tight tracking-tight whitespace-pre-line text-[11px] sm:text-xs drop-shadow-xs"
@@ -480,30 +542,7 @@ export const ProductMockup: React.FC<ProductMockupProps> = ({
                   </div>
                 ))}
             </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center px-1.5 py-1 border border-current/20 rounded-sm">
-              <span
-                style={{ color: accentColor }}
-                className="text-[8px] font-mono uppercase tracking-widest font-semibold leading-none mb-1"
-              >
-                {side === 'Back' ? 'BACK PRINT' : 'PRINTZONE'}
-              </span>
-              <span
-                style={{ color: textPrimary }}
-                className="font-display font-extrabold text-[11px] sm:text-xs leading-tight tracking-tight line-clamp-2"
-              >
-                {side === 'Back' ? `${graphicText} · BACK` : graphicText}
-              </span>
-              {graphicSubtext && (
-                <span
-                  style={{ color: textPrimary }}
-                  className="text-[8px] font-mono opacity-75 mt-0.5 line-clamp-1"
-                >
-                  {graphicSubtext}
-                </span>
-              )}
-            </div>
-          )}
+          ) : null}
         </div>
       )}
     </div>

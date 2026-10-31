@@ -92,6 +92,7 @@ export interface Product {
   defaultGraphicText: string;
   defaultGraphicSubtext: string;
   defaultAccentColor: string;
+  imageUrl?: string;
   inStock: boolean;
   featured?: boolean;
   bestSeller?: boolean;
@@ -162,6 +163,7 @@ export interface CartItem {
   categoryName: string;
   sku: string;
   mockupShape: MockupShape;
+  productImageUrl?: string;
   selectedColor: ProductColor;
   selectedSize: string;
   selectedMaterial: string;
@@ -184,6 +186,8 @@ export interface CartItem {
   };
   directArtworkUpload?: {
     fileName: string;
+    fileType?: string;
+    fileSize?: string;
     fileDataUrl: string;
     notes?: string;
   };
