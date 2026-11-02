@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CanvasElementData, MockupShape, ProductColor } from '../types';
 
 interface ProductMockupProps {
@@ -109,7 +109,15 @@ export const ProductMockup: React.FC<ProductMockupProps> = ({
   const strokeHex = isLightProduct ? '#CBD5E1' : '#334155';
   const textPrimary = isLightProduct ? '#09090B' : '#FFFFFF';
   const printZone = getPrintZoneGeometry(shape);
-  const resolvedPhotoUrl = productImageUrl || SHAPE_PHOTO_MAP[shape] || SHAPE_PHOTO_MAP.tshirt;
+  const trimmedCustomUrl = productImageUrl?.trim();
+  const resolvedPhotoUrl =
+    (trimmedCustomUrl && trimmedCustomUrl.length > 0 ? trimmedCustomUrl : undefined) ||
+    SHAPE_PHOTO_MAP[shape] ||
+    SHAPE_PHOTO_MAP.tshirt;
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [resolvedPhotoUrl, shape]);
 
   const renderShapeSvg = () => {
     switch (shape) {
@@ -476,8 +484,8 @@ export const ProductMockup: React.FC<ProductMockupProps> = ({
       {/* Real Photographic Picture Format (<picture> + <img>) with automatic fallback */}
       {!imgFailed && !hidePrintOverlay ? (
         <picture className="w-full h-full block relative">
-          <source srcSet={resolvedPhotoUrl} type="image/jpeg" />
           <img
+            key={resolvedPhotoUrl}
             src={resolvedPhotoUrl}
             alt={graphicText || shape}
             referrerPolicy="no-referrer"

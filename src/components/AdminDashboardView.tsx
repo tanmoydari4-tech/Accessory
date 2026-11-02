@@ -80,6 +80,64 @@ const ORDER_STATUSES: OrderStatus[] = [
   'Rejected',
 ];
 
+/**
+ * Compresses & resizes uploaded product photos so base64 DataURLs stay lightweight (~40–80 KB)
+ * and never exceed browser localStorage quota or Firestore 1MB document limits.
+ */
+function compressProductImageFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read image file'));
+    reader.onload = () => {
+      const rawDataUrl = reader.result as string;
+      // Keep SVG or already tiny images (< 90 KB) as-is
+      if (file.type === 'image/svg+xml' || rawDataUrl.length < 90_000) {
+        resolve(rawDataUrl);
+        return;
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const MAX_DIM = 760;
+          let width = img.width || 600;
+          let height = img.height || 600;
+          if (width > MAX_DIM || height > MAX_DIM) {
+            if (width >= height) {
+              height = Math.round((height * MAX_DIM) / width);
+              width = MAX_DIM;
+            } else {
+              width = Math.round((width * MAX_DIM) / height);
+              height = MAX_DIM;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(rawDataUrl);
+            return;
+          }
+          // Fill clean white backdrop for transparent PNGs converted to JPEG
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          resolve(compressedDataUrl);
+        } catch {
+          resolve(rawDataUrl);
+        }
+      };
+      img.onerror = () => resolve(rawDataUrl);
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   currentUser,
   onAdminLoginSuccess,
@@ -100,6 +158,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showNewProductForm, setShowNewProductForm] = useState<boolean>(false);
   const [settingsSavedMsg, setSettingsSavedMsg] = useState<boolean>(false);
+  const [photoSavedNotice, setPhotoSavedNotice] = useState<{
+    productId: string;
+    productName: string;
+  } | null>(null);
 
   // Admin Login Gate State
   const [loginUserId, setLoginUserId] = useState('');
@@ -394,13 +456,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         { minQty: 50, discountPercent: 20 },
       ],
       mockupShape: newProdShape,
-      imageUrl: newProdImageUrl.trim() || undefined,
+      ...(newProdImageUrl.trim() ? { imageUrl: newProdImageUrl.trim() } : {}),
       defaultGraphicText: newProdName.slice(0, 16).toUpperCase(),
       defaultGraphicSubtext: 'CUSTOM EDITION',
       defaultAccentColor: '#2563EB',
       inStock: true,
     };
     onSaveProducts([created, ...products]);
+    setPhotoSavedNotice({
+      productId: created.id,
+      productName: created.name,
+    });
     setNewProdName('');
     setNewProdDesc('');
     setNewProdImageUrl('');
@@ -768,13 +834,16 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     <input
                       type="file"
                       accept="image/jpeg,image/png,image/webp,image/svg+xml"
-                      onChange={(e) => {
+                      onChange={async (e) => {
                         const file = e.target.files?.[0];
-                        if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = () => setNewProdImageUrl(reader.result as string);
-                        reader.readAsDataURL(file);
                         e.target.value = '';
+                        if (!file) return;
+                        try {
+                          const compressedUrl = await compressProductImageFile(file);
+                          setNewProdImageUrl(compressedUrl);
+                        } catch {
+                          // ignore
+                        }
                       }}
                       className="hidden"
                     />
@@ -786,9 +855,13 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     </label>
                     <input
                       type="text"
-                      value={newProdImageUrl}
+                      value={newProdImageUrl.startsWith('data:') ? '' : newProdImageUrl}
                       onChange={(e) => setNewProdImageUrl(e.target.value)}
-                      placeholder="https://example.com/product-photo.jpg"
+                      placeholder={
+                        newProdImageUrl.startsWith('data:')
+                          ? '✓ Uploaded photo ready (or paste URL to override)'
+                          : 'https://example.com/product-photo.jpg'
+                      }
                       className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 border border-zinc-300 rounded-lg"
                     />
                   </div>
@@ -954,6 +1027,24 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             </form>
           )}
 
+          {photoSavedNotice && (
+            <div className="flex items-center justify-between gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800">
+              <div className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  Product photo for <strong>"{photoSavedNotice.productName}"</strong> has been saved permanently! It will stay updated across the entire storefront.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPhotoSavedNotice(null)}
+                className="text-emerald-700 hover:text-emerald-950 font-mono text-[11px] cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {/* Product Table with Photo Column & 1-Click Change Photo */}
           <div className="bg-white border border-zinc-200 rounded-xl overflow-x-auto">
             <table className="w-full text-left border-collapse">
@@ -969,216 +1060,248 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 text-xs">
-                {products.map((p) => (
-                  <tr key={p.id} className="hover:bg-zinc-50/70">
-                    {/* Photo Thumbnail + Direct 1-Click Change Photo Button */}
-                    <td className="py-3 px-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-16 h-14 bg-zinc-100 border border-zinc-200 rounded-lg overflow-hidden shrink-0">
-                          <ProductMockup
-                            shape={p.mockupShape}
-                            color={p.colors[0]}
-                            productImageUrl={
-                              editingProduct?.id === p.id
-                                ? editingProduct.imageUrl
-                                : p.imageUrl
-                            }
-                            className="w-full h-full"
-                          />
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <label className="inline-flex items-center justify-center px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer transition-colors whitespace-nowrap">
-                            <span>Change Photo</span>
-                            <input
-                              type="file"
-                              accept="image/jpeg,image/png,image/webp,image/svg+xml"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (!file) return;
-                                const reader = new FileReader();
-                                reader.onload = () => {
-                                  const dataUrl = reader.result as string;
-                                  onSaveProducts(
-                                    products.map((item) =>
-                                      item.id === p.id
-                                        ? { ...item, imageUrl: dataUrl }
-                                        : item
-                                    )
-                                  );
-                                  if (editingProduct?.id === p.id) {
-                                    setEditingProduct({
-                                      ...editingProduct,
-                                      imageUrl: dataUrl,
-                                    });
-                                  }
-                                };
-                                reader.readAsDataURL(file);
-                                e.target.value = '';
-                              }}
-                              className="hidden"
+                {products.map((p) => {
+                  const activeImageUrl =
+                    editingProduct?.id === p.id ? editingProduct.imageUrl : p.imageUrl;
+                  return (
+                    <tr key={p.id} className="hover:bg-zinc-50/70">
+                      {/* Photo Thumbnail + Direct 1-Click Change Photo Button */}
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-16 h-14 bg-zinc-100 border border-zinc-200 rounded-lg overflow-hidden shrink-0">
+                            <ProductMockup
+                              shape={p.mockupShape}
+                              color={p.colors[0]}
+                              productImageUrl={activeImageUrl}
+                              className="w-full h-full"
                             />
-                          </label>
-                          {p.imageUrl && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onSaveProducts(
-                                  products.map((item) =>
-                                    item.id === p.id
-                                      ? { ...item, imageUrl: undefined }
-                                      : item
-                                  )
-                                )
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="inline-flex items-center justify-center px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer transition-colors whitespace-nowrap">
+                              <span>Change Photo</span>
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/svg+xml"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  e.target.value = '';
+                                  if (!file) return;
+                                  try {
+                                    const dataUrl = await compressProductImageFile(file);
+                                    const nextProducts = products.map((item) =>
+                                      item.id === p.id
+                                        ? {
+                                            ...(editingProduct?.id === p.id ? editingProduct : item),
+                                            imageUrl: dataUrl,
+                                          }
+                                        : item
+                                    );
+                                    onSaveProducts(nextProducts);
+                                    if (editingProduct?.id === p.id) {
+                                      setEditingProduct({
+                                        ...editingProduct,
+                                        imageUrl: dataUrl,
+                                      });
+                                    }
+                                    setPhotoSavedNotice({
+                                      productId: p.id,
+                                      productName: p.name,
+                                    });
+                                  } catch {
+                                    // ignore
+                                  }
+                                }}
+                                className="hidden"
+                              />
+                            </label>
+                            {photoSavedNotice?.productId === p.id && (
+                              <span className="text-[10px] font-mono font-semibold text-emerald-700">
+                                ✓ Photo Saved!
+                              </span>
+                            )}
+                            {activeImageUrl && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextProducts = products.map((item) => {
+                                    if (item.id !== p.id) return item;
+                                    const copy = { ...item };
+                                    delete copy.imageUrl;
+                                    return copy;
+                                  });
+                                  onSaveProducts(nextProducts);
+                                  if (editingProduct?.id === p.id) {
+                                    const editCopy = { ...editingProduct };
+                                    delete editCopy.imageUrl;
+                                    setEditingProduct(editCopy);
+                                  }
+                                  setPhotoSavedNotice(null);
+                                }}
+                                className="text-[10px] text-zinc-500 hover:text-red-600 text-left cursor-pointer"
+                              >
+                                Reset Default Photo
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Product Name & Editable URL when editing */}
+                      <td className="py-3 px-4">
+                        {editingProduct?.id === p.id ? (
+                          <div className="space-y-1.5 min-w-[180px]">
+                            <input
+                              type="text"
+                              value={editingProduct.name}
+                              onChange={(e) =>
+                                setEditingProduct({
+                                  ...editingProduct,
+                                  name: e.target.value,
+                                })
                               }
-                              className="text-[10px] text-zinc-500 hover:text-red-600 text-left cursor-pointer"
-                            >
-                              Reset Default Photo
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </td>
+                              className="w-full px-2 py-1 border border-blue-600 rounded font-semibold"
+                              placeholder="Product Name"
+                            />
+                            <input
+                              type="text"
+                              value={
+                                editingProduct.imageUrl?.startsWith('data:')
+                                  ? ''
+                                  : editingProduct.imageUrl || ''
+                              }
+                              onChange={(e) => {
+                                const val = e.target.value.trim();
+                                setEditingProduct({
+                                  ...editingProduct,
+                                  imageUrl: val ? val : undefined,
+                                });
+                              }}
+                              className="w-full px-2 py-1 border border-zinc-300 rounded text-[11px] font-mono"
+                              placeholder={
+                                editingProduct.imageUrl?.startsWith('data:')
+                                  ? '✓ Custom uploaded photo active (or paste URL)'
+                                  : 'Paste Image URL (or click Change Photo)'
+                              }
+                            />
+                          </div>
+                        ) : (
+                          <>
+                            <div className="font-semibold text-zinc-950">{p.name}</div>
+                            <div className="text-[11px] font-mono text-zinc-500">{p.sku}</div>
+                          </>
+                        )}
+                      </td>
 
-                    {/* Product Name & Editable URL when editing */}
-                    <td className="py-3 px-4">
-                      {editingProduct?.id === p.id ? (
-                        <div className="space-y-1.5 min-w-[180px]">
+                      <td className="py-3 px-4 text-zinc-600">
+                        {p.categoryName} · {p.subcategory}
+                      </td>
+
+                      <td className="py-3 px-4 font-mono font-semibold tabular-nums">
+                        {editingProduct?.id === p.id ? (
                           <input
-                            type="text"
-                            value={editingProduct.name}
+                            type="number"
+                            value={editingProduct.basePrice}
                             onChange={(e) =>
                               setEditingProduct({
                                 ...editingProduct,
-                                name: e.target.value,
+                                basePrice: Number(e.target.value),
                               })
                             }
-                            className="w-full px-2 py-1 border border-blue-600 rounded font-semibold"
-                            placeholder="Product Name"
+                            className="w-20 px-2 py-1 border border-blue-600 rounded font-mono"
                           />
+                        ) : (
+                          `₹${p.basePrice}`
+                        )}
+                      </td>
+
+                      <td className="py-3 px-4 font-mono tabular-nums">
+                        {editingProduct?.id === p.id ? (
                           <input
-                            type="text"
-                            value={editingProduct.imageUrl || ''}
+                            type="number"
+                            value={editingProduct.minOrderQty}
                             onChange={(e) =>
                               setEditingProduct({
                                 ...editingProduct,
-                                imageUrl: e.target.value || undefined,
+                                minOrderQty: Number(e.target.value),
                               })
                             }
-                            className="w-full px-2 py-1 border border-zinc-300 rounded text-[11px] font-mono"
-                            placeholder="Image URL (or use Change Photo)"
+                            className="w-16 px-2 py-1 border border-blue-600 rounded font-mono"
                           />
-                        </div>
-                      ) : (
-                        <>
-                          <div className="font-semibold text-zinc-950">{p.name}</div>
-                          <div className="text-[11px] font-mono text-zinc-500">{p.sku}</div>
-                        </>
-                      )}
-                    </td>
+                        ) : (
+                          p.minOrderQty
+                        )}
+                      </td>
 
-                    <td className="py-3 px-4 text-zinc-600">
-                      {p.categoryName} · {p.subcategory}
-                    </td>
-
-                    <td className="py-3 px-4 font-mono font-semibold tabular-nums">
-                      {editingProduct?.id === p.id ? (
-                        <input
-                          type="number"
-                          value={editingProduct.basePrice}
-                          onChange={(e) =>
-                            setEditingProduct({
-                              ...editingProduct,
-                              basePrice: Number(e.target.value),
-                            })
-                          }
-                          className="w-20 px-2 py-1 border border-blue-600 rounded font-mono"
-                        />
-                      ) : (
-                        `₹${p.basePrice}`
-                      )}
-                    </td>
-
-                    <td className="py-3 px-4 font-mono tabular-nums">
-                      {editingProduct?.id === p.id ? (
-                        <input
-                          type="number"
-                          value={editingProduct.minOrderQty}
-                          onChange={(e) =>
-                            setEditingProduct({
-                              ...editingProduct,
-                              minOrderQty: Number(e.target.value),
-                            })
-                          }
-                          className="w-16 px-2 py-1 border border-blue-600 rounded font-mono"
-                        />
-                      ) : (
-                        p.minOrderQty
-                      )}
-                    </td>
-
-                    <td className="py-3 px-4">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onSaveProducts(
-                            products.map((item) =>
-                              item.id === p.id ? { ...item, inStock: !item.inStock } : item
-                            )
-                          )
-                        }
-                        className={`text-xs font-medium cursor-pointer ${
-                          p.inStock ? 'text-emerald-700' : 'text-red-600'
-                        }`}
-                      >
-                        {p.inStock ? 'In Stock' : 'Out of Stock'}
-                      </button>
-                    </td>
-
-                    <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
-                      {editingProduct?.id === p.id ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onSaveProducts(
-                                products.map((item) =>
-                                  item.id === editingProduct.id ? editingProduct : item
-                                )
-                              );
-                              setEditingProduct(null);
-                            }}
-                            className="px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 rounded cursor-pointer"
-                          >
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditingProduct(null)}
-                            className="px-2 py-1 text-xs text-zinc-500 hover:text-zinc-800 cursor-pointer"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
+                      <td className="py-3 px-4">
                         <button
                           type="button"
-                          onClick={() => setEditingProduct(p)}
-                          className="px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+                          onClick={() =>
+                            onSaveProducts(
+                              products.map((item) =>
+                                item.id === p.id ? { ...item, inStock: !item.inStock } : item
+                              )
+                            )
+                          }
+                          className={`text-xs font-medium cursor-pointer ${
+                            p.inStock ? 'text-emerald-700' : 'text-red-600'
+                          }`}
                         >
-                          Edit Details
+                          {p.inStock ? 'In Stock' : 'Out of Stock'}
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => onSaveProducts(products.filter((item) => item.id !== p.id))}
-                        className="p-1 text-zinc-400 hover:text-red-600 cursor-pointer"
-                        title="Delete Product"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 inline" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+
+                      <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
+                        {editingProduct?.id === p.id ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onSaveProducts(
+                                  products.map((item) =>
+                                    item.id === editingProduct.id ? editingProduct : item
+                                  )
+                                );
+                                setPhotoSavedNotice({
+                                  productId: editingProduct.id,
+                                  productName: editingProduct.name,
+                                });
+                                setEditingProduct(null);
+                              }}
+                              className="px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 rounded cursor-pointer"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingProduct(null)}
+                              className="px-2 py-1 text-xs text-zinc-500 hover:text-zinc-800 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setEditingProduct(p)}
+                            className="px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+                          >
+                            Edit Details
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onSaveProducts(products.filter((item) => item.id !== p.id))
+                          }
+                          className="p-1 text-zinc-400 hover:text-red-600 cursor-pointer"
+                          title="Delete Product"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 inline" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

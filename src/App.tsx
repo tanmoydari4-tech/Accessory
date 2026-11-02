@@ -54,12 +54,121 @@ import {
 
 const STORAGE_KEYS = {
   PRODUCTS: 'pz_studio_products_v1',
+  PRODUCT_OVERRIDES: 'pz_studio_product_overrides_v2',
   ORDERS: 'pz_studio_orders_v2',
   SAMPLES: 'pz_studio_samples_v1',
   SETTINGS: 'pz_studio_settings_v1',
   LEGACY_SHARED_CART: 'pz_studio_cart_v1',
   USER: 'pz_studio_user_v2',
 };
+
+interface StoredProductOverrides {
+  byId: Record<string, Product>;
+  deletedIds: string[];
+  updatedAt: number;
+}
+
+/**
+ * Strips any `undefined` properties recursively so Firebase Firestore `setDoc`
+ * never throws `Unsupported field value: undefined`.
+ */
+function sanitizeForFirestore<T>(input: T): T {
+  return JSON.parse(JSON.stringify(input)) as T;
+}
+
+function loadStoredProductOverrides(): StoredProductOverrides {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PRODUCT_OVERRIDES);
+    if (!raw) return { byId: {}, deletedIds: [], updatedAt: 0 };
+    const parsed = JSON.parse(raw) as Partial<StoredProductOverrides>;
+    return {
+      byId: parsed.byId && typeof parsed.byId === 'object' ? parsed.byId : {},
+      deletedIds: Array.isArray(parsed.deletedIds) ? parsed.deletedIds : [],
+      updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+    };
+  } catch {
+    return { byId: {}, deletedIds: [], updatedAt: 0 };
+  }
+}
+
+function saveStoredProductOverrides(nextProducts: Product[]): void {
+  try {
+    const initialMap = new Map(INITIAL_PRODUCTS.map((p) => [p.id, p]));
+    const nextIds = new Set(nextProducts.map((p) => p.id));
+    const deletedIds = INITIAL_PRODUCTS.filter((p) => !nextIds.has(p.id)).map((p) => p.id);
+    const byId: Record<string, Product> = {};
+
+    nextProducts.forEach((p) => {
+      const cleanProd = sanitizeForFirestore(p);
+      const base = initialMap.get(p.id);
+      if (
+        !base ||
+        (cleanProd.imageUrl || '') !== (base.imageUrl || '') ||
+        cleanProd.name !== base.name ||
+        cleanProd.basePrice !== base.basePrice ||
+        cleanProd.minOrderQty !== base.minOrderQty ||
+        cleanProd.inStock !== base.inStock
+      ) {
+        byId[p.id] = cleanProd;
+      }
+    });
+
+    const payload: StoredProductOverrides = {
+      byId,
+      deletedIds,
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(STORAGE_KEYS.PRODUCT_OVERRIDES, JSON.stringify(payload));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function mergeProductsWithOverrides(
+  baseList: Product[],
+  remoteOverridesById?: Record<string, Product>
+): Product[] {
+  const localOverrides = loadStoredProductOverrides();
+  const deletedSet = new Set(localOverrides.deletedIds);
+  // Local overrides take priority over remote snapshots so recent admin edits never revert
+  const combinedOverrides: Record<string, Product> = {
+    ...(remoteOverridesById || {}),
+    ...localOverrides.byId,
+  };
+
+  const seenIds = new Set<string>();
+  const merged: Product[] = [];
+
+  // 1. Prepend any newly created custom admin products first
+  Object.values(combinedOverrides).forEach((customProd) => {
+    const existsInBase = baseList.some((b) => b.id === customProd.id);
+    if (!existsInBase && !deletedSet.has(customProd.id)) {
+      seenIds.add(customProd.id);
+      merged.push(customProd);
+    }
+  });
+
+  // 2. Map base products and overlay any saved admin changes (like custom imageUrl)
+  baseList.forEach((item) => {
+    if (deletedSet.has(item.id) || seenIds.has(item.id)) return;
+    seenIds.add(item.id);
+    const override = combinedOverrides[item.id];
+    if (override) {
+      const nextItem: Product = {
+        ...item,
+        ...override,
+      };
+      if (!override.imageUrl) {
+        delete nextItem.imageUrl;
+      }
+      merged.push(nextItem);
+    } else {
+      merged.push(item);
+    }
+  });
+
+  return merged;
+}
 
 const getUserCartKey = (uid: string) => `pz_studio_user_cart_v3_${uid}`;
 
@@ -85,9 +194,12 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-      return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+      const parsed: Product[] = saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+      return mergeProductsWithOverrides(
+        Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_PRODUCTS
+      );
     } catch {
-      return INITIAL_PRODUCTS;
+      return mergeProductsWithOverrides(INITIAL_PRODUCTS);
     }
   });
 
@@ -173,13 +285,15 @@ export default function App() {
     }
   });
 
-  // Persist to localStorage + attempt non-blocking Firestore sync on user's project (detabase-f6c7f)
+  // Persist to localStorage + keep selectedProduct & studioProduct synced with latest product photo/details
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
     } catch {
       // ignore quota error
     }
+    setSelectedProduct((prev) => products.find((p) => p.id === prev.id) || prev);
+    setStudioProduct((prev) => products.find((p) => p.id === prev.id) || prev);
   }, [products]);
 
   useEffect(() => {
@@ -317,13 +431,41 @@ export default function App() {
             if (snap.exists()) {
               const data = snap.data() as { items?: Product[] };
               if (Array.isArray(data.items) && data.items.length > 0) {
-                setProducts(data.items);
+                setProducts((prev) => {
+                  const prevOverrides: Record<string, Product> = {};
+                  prev.forEach((p) => {
+                    if (p.imageUrl) {
+                      prevOverrides[p.id] = p;
+                    }
+                  });
+                  return mergeProductsWithOverrides(data.items!, prevOverrides);
+                });
               }
             }
           },
           () => {}
         );
         unsubs.push(unsubCatalog);
+
+        const unsubProductOverrides = onSnapshot(
+          collection(db, 'product_overrides'),
+          (snap) => {
+            if (!snap.empty) {
+              const remoteOverridesById: Record<string, Product> = {};
+              snap.forEach((d) => {
+                const prod = d.data() as Product;
+                if (prod && prod.id) {
+                  remoteOverridesById[prod.id] = prod;
+                }
+              });
+              if (Object.keys(remoteOverridesById).length > 0) {
+                setProducts((prev) => mergeProductsWithOverrides(prev, remoteOverridesById));
+              }
+            }
+          },
+          () => {}
+        );
+        unsubs.push(unsubProductOverrides);
 
         const unsubSamples = onSnapshot(
           doc(db, 'store', 'samples'),
@@ -1545,25 +1687,59 @@ export default function App() {
             onAdminLogout={handleLogout}
             products={products}
             onSaveProducts={(nextProducts) => {
-              setProducts(nextProducts);
+              const cleanProducts = sanitizeForFirestore(nextProducts);
+              saveStoredProductOverrides(cleanProducts);
+              try {
+                localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(cleanProducts));
+              } catch {
+                // ignore
+              }
+              setProducts(cleanProducts);
+
               if (db) {
-                setDoc(doc(db, 'store', 'catalog'), { items: nextProducts }).catch(() => {});
+                // 1. Save each modified/custom product into its own Firestore document so base64 images never hit the 1MB single-doc limit
+                const overrides = loadStoredProductOverrides();
+                Object.values(overrides.byId).forEach((prod) => {
+                  setDoc(
+                    doc(db, 'product_overrides', prod.id),
+                    sanitizeForFirestore(prod)
+                  ).catch(() => {});
+                });
+                // 2. Also sync the catalog document (keep under 750KB so Firestore 1MB limit never rejects & rolls back)
+                const rawCatalogJson = JSON.stringify(cleanProducts);
+                const catalogItemsForFirestore =
+                  rawCatalogJson.length > 750_000
+                    ? cleanProducts.map((item) => {
+                        if (item.imageUrl?.startsWith('data:')) {
+                          const copy = { ...item };
+                          delete copy.imageUrl;
+                          return copy;
+                        }
+                        return item;
+                      })
+                    : cleanProducts;
+                setDoc(
+                  doc(db, 'store', 'catalog'),
+                  sanitizeForFirestore({ items: catalogItemsForFirestore })
+                ).catch(() => {});
               }
             }}
             orders={orders}
             onUpdateOrderStatus={handleUpdateOrderStatus}
             sampleDesigns={sampleDesigns}
             onSaveSampleDesigns={(nextSamples) => {
-              setSampleDesigns(nextSamples);
+              const cleanSamples = sanitizeForFirestore(nextSamples);
+              setSampleDesigns(cleanSamples);
               if (db) {
-                setDoc(doc(db, 'store', 'samples'), { items: nextSamples }).catch(() => {});
+                setDoc(doc(db, 'store', 'samples'), { items: cleanSamples }).catch(() => {});
               }
             }}
             settings={settings}
             onSaveSettings={(nextSettings) => {
-              setSettings(nextSettings);
+              const cleanSettings = sanitizeForFirestore(nextSettings);
+              setSettings(cleanSettings);
               if (db) {
-                setDoc(doc(db, 'store', 'settings'), nextSettings).catch(() => {});
+                setDoc(doc(db, 'store', 'settings'), cleanSettings).catch(() => {});
               }
             }}
           />
