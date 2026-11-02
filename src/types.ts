@@ -241,9 +241,34 @@ export interface Order {
 }
 
 export interface StoreSettings {
+  // Header & Hero Customization
+  brandName?: string;
+  brandLogoUrl?: string;
+  promoBannerText: string;
+  searchPlaceholder?: string;
+  navShopAllLabel?: string;
+  navCategoriesLabel?: string;
+  navSamplesLabel?: string;
+  navStudioLabel?: string;
+  navTrackOrderLabel?: string;
   heroTitle: string;
   heroSubtitle: string;
-  promoBannerText: string;
+
+  // Footer Customization
+  footerBrandTitle?: string;
+  newsletterTitle?: string;
+  newsletterSubtitle?: string;
+  footerCol1Title?: string;
+  footerCol2Title?: string;
+  footerCol3Title?: string;
+  footerCopyrightText?: string;
+  footerBottomTagline?: string;
+  whatsappNumber: string;
+  supportEmail: string;
+  supportPhone: string;
+  studioAddress: string;
+
+  // Payment & Shipping Rules
   codEnabled: boolean;
   upiEnabled: boolean;
   upiMerchantId: string;
@@ -253,10 +278,7 @@ export interface StoreSettings {
   standardDeliveryCharge: number;
   freeDeliveryThreshold: number;
   gstPercentage: number;
-  whatsappNumber: string;
-  supportEmail: string;
-  supportPhone: string;
-  studioAddress: string;
+  updatedAt?: number;
 }
 
 export interface UserProfile {

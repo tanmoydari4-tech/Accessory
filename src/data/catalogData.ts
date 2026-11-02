@@ -2277,9 +2277,25 @@ export const INITIAL_SAMPLE_DESIGNS: SampleDesign[] = [
 ];
 
 export const INITIAL_STORE_SETTINGS: StoreSettings = {
-  heroTitle: 'Your Ideas. Our Prints.',
-  heroSubtitle: 'Precision custom printing on heavyweight apparel, organic bags, buttons, calendars, personalized gifts, and corporate stationery — designed live in your browser.',
+  brandName: 'PrintZone',
+  brandLogoUrl: '',
   promoBannerText: 'DEMO STORE DATA · Free Pan-India Delivery on Orders Above ₹999 · Bulk Discounts Up to 30% Off',
+  searchPlaceholder: 'Search for custom T-shirts, photo mugs, tote bags, badges, calendars...',
+  navShopAllLabel: 'Shop All',
+  navCategoriesLabel: 'Categories',
+  navSamplesLabel: 'Sample Designs',
+  navStudioLabel: 'Custom Studio',
+  navTrackOrderLabel: 'Track Order',
+  heroTitle: 'Shop Custom Printed T-Shirts, Mugs, Tote Bags, Badges & Personalized Gifts',
+  heroSubtitle: 'Select your size & color, click Add to Cart or Buy Now for instant checkout, or click Customize on any item to add your own photo, logo, or name.',
+  footerBrandTitle: 'PrintZone – Custom Printing Studio',
+  newsletterTitle: 'Subscribe to PrintZone Studio Dispatch',
+  newsletterSubtitle: 'Receive seasonal template drops, corporate gifting lookbooks, and bulk print offers.',
+  footerCol1Title: 'Catalog & Studio',
+  footerCol2Title: 'Customer & Operations',
+  footerCol3Title: 'Company & Policies',
+  footerCopyrightText: `© ${new Date().getFullYear()} PrintZone – Custom Printing Studio. All rights reserved.`,
+  footerBottomTagline: 'Custom Printing & Personalized Gifts across India',
   codEnabled: true,
   upiEnabled: true,
   upiMerchantId: 'printzone.studio@okaxis',
@@ -2293,6 +2309,7 @@ export const INITIAL_STORE_SETTINGS: StoreSettings = {
   supportEmail: 'orders@printzonestudio.in',
   supportPhone: '+91 98300 12345',
   studioAddress: 'Plot 42, Sector V Industrial Print Hub, Salt Lake, Kolkata, West Bengal – 700091',
+  updatedAt: 0,
 };
 
 export const INITIAL_DEMO_ORDERS: Order[] = [

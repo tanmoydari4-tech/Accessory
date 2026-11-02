@@ -9,7 +9,7 @@ import {
   StoreSettings,
   UserProfile,
 } from '../types';
-import { CATEGORIES, PRODUCT_COLORS } from '../data/catalogData';
+import { CATEGORIES, INITIAL_STORE_SETTINGS, PRODUCT_COLORS } from '../data/catalogData';
 import { ProductMockup } from './ProductMockup';
 import { auth } from '../firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
@@ -99,7 +99,7 @@ function compressProductImageFile(file: File): Promise<string> {
       const img = new Image();
       img.onload = () => {
         try {
-          const MAX_DIM = 760;
+          const MAX_DIM = 600;
           let width = img.width || 600;
           let height = img.height || 600;
           if (width > MAX_DIM || height > MAX_DIM) {
@@ -125,7 +125,7 @@ function compressProductImageFile(file: File): Promise<string> {
           ctx.fillRect(0, 0, width, height);
           ctx.drawImage(img, 0, 0, width, height);
 
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.78);
           resolve(compressedDataUrl);
         } catch {
           resolve(rawDataUrl);
@@ -152,12 +152,13 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   onSaveSettings,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'orders' | 'products' | 'samples' | 'settings' | 'reports'
+    'orders' | 'products' | 'header-footer' | 'samples' | 'settings' | 'reports'
   >('orders');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showNewProductForm, setShowNewProductForm] = useState<boolean>(false);
   const [settingsSavedMsg, setSettingsSavedMsg] = useState<boolean>(false);
+  const [headerFooterSavedMsg, setHeaderFooterSavedMsg] = useState<boolean>(false);
   const [photoSavedNotice, setPhotoSavedNotice] = useState<{
     productId: string;
     productName: string;
@@ -461,6 +462,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       defaultGraphicSubtext: 'CUSTOM EDITION',
       defaultAccentColor: '#2563EB',
       inStock: true,
+      featured: true,
     };
     onSaveProducts([created, ...products]);
     setPhotoSavedNotice({
@@ -544,7 +546,20 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           </button>
           <button
             type="button"
-            onClick={onAdminLogout}
+            onClick={() => {
+              if (editingProduct) {
+                onSaveProducts(
+                  products.map((item) =>
+                    item.id === editingProduct.id
+                      ? { ...editingProduct, featured: true }
+                      : item
+                  )
+                );
+                setEditingProduct(null);
+              }
+              onSaveSettings(settings);
+              onAdminLogout();
+            }}
             className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
           >
             <LogOut className="w-3.5 h-3.5" />
@@ -601,8 +616,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         {[
           { id: 'orders', label: 'Orders & Artwork Queue', icon: Package },
           { id: 'products', label: 'Products & Pricing', icon: Layers },
+          { id: 'header-footer', label: 'Header & Footer', icon: Edit3 },
           { id: 'samples', label: 'Sample Gallery Manager', icon: Edit3 },
-          { id: 'settings', label: 'Payments, Shipping & Banners', icon: Settings },
+          { id: 'settings', label: 'Payments & Shipping', icon: Settings },
           { id: 'reports', label: 'Sales & Customer Reports', icon: TrendingUp },
         ].map((t) => {
           const Icon = t.icon;
@@ -1088,20 +1104,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                                   if (!file) return;
                                   try {
                                     const dataUrl = await compressProductImageFile(file);
+                                    const updatedItem: Product = {
+                                      ...(editingProduct?.id === p.id ? editingProduct : p),
+                                      imageUrl: dataUrl,
+                                      featured: true,
+                                    };
                                     const nextProducts = products.map((item) =>
-                                      item.id === p.id
-                                        ? {
-                                            ...(editingProduct?.id === p.id ? editingProduct : item),
-                                            imageUrl: dataUrl,
-                                          }
-                                        : item
+                                      item.id === p.id ? updatedItem : item
                                     );
                                     onSaveProducts(nextProducts);
                                     if (editingProduct?.id === p.id) {
-                                      setEditingProduct({
-                                        ...editingProduct,
-                                        imageUrl: dataUrl,
-                                      });
+                                      setEditingProduct(updatedItem);
                                     }
                                     setPhotoSavedNotice({
                                       productId: p.id,
@@ -1153,12 +1166,19 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                             <input
                               type="text"
                               value={editingProduct.name}
-                              onChange={(e) =>
-                                setEditingProduct({
+                              onChange={(e) => {
+                                const updated = {
                                   ...editingProduct,
                                   name: e.target.value,
-                                })
-                              }
+                                  featured: true,
+                                };
+                                setEditingProduct(updated);
+                                onSaveProducts(
+                                  products.map((item) =>
+                                    item.id === updated.id ? updated : item
+                                  )
+                                );
+                              }}
                               className="w-full px-2 py-1 border border-blue-600 rounded font-semibold"
                               placeholder="Product Name"
                             />
@@ -1171,10 +1191,20 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                               }
                               onChange={(e) => {
                                 const val = e.target.value.trim();
-                                setEditingProduct({
+                                const updated: Product = {
                                   ...editingProduct,
                                   imageUrl: val ? val : undefined,
-                                });
+                                  featured: true,
+                                };
+                                if (!val) {
+                                  delete updated.imageUrl;
+                                }
+                                setEditingProduct(updated);
+                                onSaveProducts(
+                                  products.map((item) =>
+                                    item.id === updated.id ? updated : item
+                                  )
+                                );
                               }}
                               className="w-full px-2 py-1 border border-zinc-300 rounded text-[11px] font-mono"
                               placeholder={
@@ -1401,14 +1431,618 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       )}
 
+      {/* TAB: HEADER & FOOTER CUSTOMIZATION */}
+      {activeTab === 'header-footer' && (
+        <div className="space-y-6">
+          {headerFooterSavedMsg && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs font-semibold text-emerald-900">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  Header & Footer updated live! Changes are permanently saved and will remain active even after signing out of Admin.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHeaderFooterSavedMsg(false)}
+                className="text-xs font-medium text-emerald-700 hover:underline cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* LEFT CARD: HEADER & HERO CUSTOMIZATION */}
+            <div className="bg-white border border-zinc-200 rounded-xl p-6 space-y-5">
+              <div className="border-b border-zinc-200 pb-3 flex items-center justify-between">
+                <div>
+                  <div className="text-[11px] font-mono text-blue-600 uppercase font-semibold">
+                    Website Top Area
+                  </div>
+                  <h2 className="text-lg font-display font-bold text-zinc-950">
+                    Header, Logo, Menu & Hero Banner
+                  </h2>
+                </div>
+                <span className="px-2.5 py-1 text-[10px] font-mono font-semibold bg-blue-50 text-blue-700 rounded-md">
+                  Live Header Editor
+                </span>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    Header Brand Name / Wordmark
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.brandName ?? 'PrintZone'}
+                    onChange={(e) =>
+                      onSaveSettings({ ...settings, brandName: e.target.value })
+                    }
+                    placeholder="e.g., PrintZone"
+                    className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    Header Brand Logo Image (Optional Upload or URL)
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {settings.brandLogoUrl ? (
+                      <img
+                        src={settings.brandLogoUrl}
+                        alt="Header Logo"
+                        className="h-10 w-auto max-w-[120px] object-contain rounded border border-zinc-200 bg-zinc-50 p-1"
+                      />
+                    ) : null}
+                    <label className="px-3 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer">
+                      Upload Logo Photo
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const dataUrl = await compressProductImageFile(file);
+                            onSaveSettings({ ...settings, brandLogoUrl: dataUrl });
+                            setHeaderFooterSavedMsg(true);
+                          } catch {
+                            // ignore
+                          }
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                    {settings.brandLogoUrl && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onSaveSettings({ ...settings, brandLogoUrl: '' })
+                        }
+                        className="px-2.5 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
+                      >
+                        Remove Logo
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={
+                      settings.brandLogoUrl?.startsWith('data:')
+                        ? ''
+                        : settings.brandLogoUrl || ''
+                    }
+                    onChange={(e) =>
+                      onSaveSettings({ ...settings, brandLogoUrl: e.target.value })
+                    }
+                    placeholder={
+                      settings.brandLogoUrl?.startsWith('data:')
+                        ? '✓ Custom uploaded logo active (or paste image URL)'
+                        : 'Or paste direct Logo Image URL (https://...)'
+                    }
+                    className="mt-2 w-full px-3 py-1.5 text-xs border border-zinc-300 rounded-lg font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    Top Promo Announcement Bar Text
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.promoBannerText}
+                    onChange={(e) =>
+                      onSaveSettings({ ...settings, promoBannerText: e.target.value })
+                    }
+                    className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    Header Search Bar Placeholder Text
+                  </label>
+                  <input
+                    type="text"
+                    value={
+                      settings.searchPlaceholder ??
+                      'Search for custom T-shirts, photo mugs, tote bags, badges, calendars...'
+                    }
+                    onChange={(e) =>
+                      onSaveSettings({
+                        ...settings,
+                        searchPlaceholder: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                </div>
+
+                <div className="pt-2 border-t border-zinc-200">
+                  <div className="text-xs font-bold text-zinc-900 mb-2">
+                    Header Navigation Menu Labels (5 Links)
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                        Menu Link 1 (All Products)
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.navShopAllLabel ?? 'Shop All'}
+                        onChange={(e) =>
+                          onSaveSettings({
+                            ...settings,
+                            navShopAllLabel: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs border border-zinc-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                        Menu Link 2 (Categories)
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.navCategoriesLabel ?? 'Categories'}
+                        onChange={(e) =>
+                          onSaveSettings({
+                            ...settings,
+                            navCategoriesLabel: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs border border-zinc-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                        Menu Link 3 (Sample Gallery)
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.navSamplesLabel ?? 'Sample Designs'}
+                        onChange={(e) =>
+                          onSaveSettings({
+                            ...settings,
+                            navSamplesLabel: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs border border-zinc-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                        Menu Link 4 (Design Studio)
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.navStudioLabel ?? 'Custom Studio'}
+                        onChange={(e) =>
+                          onSaveSettings({
+                            ...settings,
+                            navStudioLabel: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs border border-zinc-300 rounded-lg"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                        Menu Link 5 (Order Tracking)
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.navTrackOrderLabel ?? 'Track Order'}
+                        onChange={(e) =>
+                          onSaveSettings({
+                            ...settings,
+                            navTrackOrderLabel: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs border border-zinc-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-zinc-200 space-y-3">
+                  <div className="text-xs font-bold text-zinc-900">
+                    Homepage Hero Banner Text
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                      Hero Main Heading
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.heroTitle}
+                      onChange={(e) =>
+                        onSaveSettings({ ...settings, heroTitle: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                      Hero Subtitle / Description
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={settings.heroSubtitle}
+                      onChange={(e) =>
+                        onSaveSettings({ ...settings, heroSubtitle: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT CARD: FOOTER CUSTOMIZATION */}
+            <div className="bg-white border border-zinc-200 rounded-xl p-6 space-y-5">
+              <div className="border-b border-zinc-200 pb-3 flex items-center justify-between">
+                <div>
+                  <div className="text-[11px] font-mono text-blue-600 uppercase font-semibold">
+                    Website Bottom Area
+                  </div>
+                  <h2 className="text-lg font-display font-bold text-zinc-950">
+                    Footer Contact, Address, Newsletter & Copyright
+                  </h2>
+                </div>
+                <span className="px-2.5 py-1 text-[10px] font-mono font-semibold bg-emerald-50 text-emerald-700 rounded-md">
+                  Live Footer Editor
+                </span>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    Footer Brand Heading
+                  </label>
+                  <input
+                    type="text"
+                    value={
+                      settings.footerBrandTitle ??
+                      'PrintZone – Custom Printing Studio'
+                    }
+                    onChange={(e) =>
+                      onSaveSettings({
+                        ...settings,
+                        footerBrandTitle: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    Footer Studio Address
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={settings.studioAddress}
+                    onChange={(e) =>
+                      onSaveSettings({ ...settings, studioAddress: e.target.value })
+                    }
+                    className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Footer Support Phone
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.supportPhone}
+                      onChange={(e) =>
+                        onSaveSettings({ ...settings, supportPhone: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                      Footer Support Email
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.supportEmail}
+                      onChange={(e) =>
+                        onSaveSettings({ ...settings, supportEmail: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                    WhatsApp Support & Order Number (with Country Code)
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.whatsappNumber}
+                    onChange={(e) =>
+                      onSaveSettings({ ...settings, whatsappNumber: e.target.value })
+                    }
+                    className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg font-mono"
+                  />
+                </div>
+
+                <div className="pt-2 border-t border-zinc-200 space-y-3">
+                  <div className="text-xs font-bold text-zinc-900">
+                    Footer Newsletter Bar
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                      Newsletter Title
+                    </label>
+                    <input
+                      type="text"
+                      value={
+                        settings.newsletterTitle ??
+                        'Subscribe to PrintZone Studio Dispatch'
+                      }
+                      onChange={(e) =>
+                        onSaveSettings({
+                          ...settings,
+                          newsletterTitle: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                      Newsletter Subtitle
+                    </label>
+                    <input
+                      type="text"
+                      value={
+                        settings.newsletterSubtitle ??
+                        'Receive seasonal template drops, corporate gifting lookbooks, and bulk print offers.'
+                      }
+                      onChange={(e) =>
+                        onSaveSettings({
+                          ...settings,
+                          newsletterSubtitle: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-zinc-200 space-y-3">
+                  <div className="text-xs font-bold text-zinc-900">
+                    Footer Column Headings & Copyright Bar
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                        Column 1 Heading
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.footerCol1Title ?? 'Catalog & Studio'}
+                        onChange={(e) =>
+                          onSaveSettings({
+                            ...settings,
+                            footerCol1Title: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs border border-zinc-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                        Column 2 Heading
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.footerCol2Title ?? 'Customer & Operations'}
+                        onChange={(e) =>
+                          onSaveSettings({
+                            ...settings,
+                            footerCol2Title: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs border border-zinc-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                        Column 3 Heading
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.footerCol3Title ?? 'Company & Policies'}
+                        onChange={(e) =>
+                          onSaveSettings({
+                            ...settings,
+                            footerCol3Title: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs border border-zinc-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                      Bottom Left Copyright Text
+                    </label>
+                    <input
+                      type="text"
+                      value={
+                        settings.footerCopyrightText ??
+                        `© ${new Date().getFullYear()} PrintZone – Custom Printing Studio. All rights reserved.`
+                      }
+                      onChange={(e) =>
+                        onSaveSettings({
+                          ...settings,
+                          footerCopyrightText: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-600 mb-1">
+                      Bottom Right Tagline
+                    </label>
+                    <input
+                      type="text"
+                      value={
+                        settings.footerBottomTagline ??
+                        'Custom Printing & Personalized Gifts across India'
+                      }
+                      onChange={(e) =>
+                        onSaveSettings({
+                          ...settings,
+                          footerBottomTagline: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Save & Reset Action Bar */}
+          <div className="bg-white border border-zinc-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  onSaveSettings({ ...settings });
+                  setHeaderFooterSavedMsg(true);
+                }}
+                className="px-5 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer inline-flex items-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                Save Header & Footer Changes
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onSaveSettings({
+                    ...settings,
+                    brandName: INITIAL_STORE_SETTINGS.brandName,
+                    brandLogoUrl: INITIAL_STORE_SETTINGS.brandLogoUrl,
+                    promoBannerText: INITIAL_STORE_SETTINGS.promoBannerText,
+                    searchPlaceholder: INITIAL_STORE_SETTINGS.searchPlaceholder,
+                    navShopAllLabel: INITIAL_STORE_SETTINGS.navShopAllLabel,
+                    navCategoriesLabel: INITIAL_STORE_SETTINGS.navCategoriesLabel,
+                    navSamplesLabel: INITIAL_STORE_SETTINGS.navSamplesLabel,
+                    navStudioLabel: INITIAL_STORE_SETTINGS.navStudioLabel,
+                    navTrackOrderLabel: INITIAL_STORE_SETTINGS.navTrackOrderLabel,
+                    heroTitle: INITIAL_STORE_SETTINGS.heroTitle,
+                    heroSubtitle: INITIAL_STORE_SETTINGS.heroSubtitle,
+                    footerBrandTitle: INITIAL_STORE_SETTINGS.footerBrandTitle,
+                    newsletterTitle: INITIAL_STORE_SETTINGS.newsletterTitle,
+                    newsletterSubtitle: INITIAL_STORE_SETTINGS.newsletterSubtitle,
+                    footerCol1Title: INITIAL_STORE_SETTINGS.footerCol1Title,
+                    footerCol2Title: INITIAL_STORE_SETTINGS.footerCol2Title,
+                    footerCol3Title: INITIAL_STORE_SETTINGS.footerCol3Title,
+                    footerCopyrightText: INITIAL_STORE_SETTINGS.footerCopyrightText,
+                    footerBottomTagline: INITIAL_STORE_SETTINGS.footerBottomTagline,
+                    studioAddress: INITIAL_STORE_SETTINGS.studioAddress,
+                    supportPhone: INITIAL_STORE_SETTINGS.supportPhone,
+                    supportEmail: INITIAL_STORE_SETTINGS.supportEmail,
+                  });
+                  setHeaderFooterSavedMsg(true);
+                }}
+                className="px-4 py-2.5 text-xs font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg cursor-pointer"
+              >
+                Reset Header & Footer to Default
+              </button>
+            </div>
+
+            <div className="text-xs text-zinc-500">
+              All changes update the top Header and bottom Footer immediately across all 20 pages.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* TAB 4: STORE, PAYMENT & SHIPPING SETTINGS */}
       {activeTab === 'settings' && (
         <div className="max-w-3xl bg-white border border-zinc-200 rounded-xl p-6 space-y-5">
-          <h2 className="text-lg font-display font-bold text-zinc-950">
-            Storefront Banners, Indian Payment Gateways & Delivery Rules
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-display font-bold text-zinc-950">
+              Storefront Banners, Indian Payment Gateways & Delivery Rules
+            </h2>
+            <button
+              type="button"
+              onClick={() => setActiveTab('header-footer')}
+              className="px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg cursor-pointer"
+            >
+              Open Full Header & Footer Editor →
+            </button>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                Header Brand Name
+              </label>
+              <input
+                type="text"
+                value={settings.brandName ?? 'PrintZone'}
+                onChange={(e) => onSaveSettings({ ...settings, brandName: e.target.value })}
+                className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                Footer Brand Title
+              </label>
+              <input
+                type="text"
+                value={settings.footerBrandTitle ?? 'PrintZone – Custom Printing Studio'}
+                onChange={(e) =>
+                  onSaveSettings({ ...settings, footerBrandTitle: e.target.value })
+                }
+                className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+              />
+            </div>
+
             <div className="sm:col-span-2">
               <label className="block text-xs font-semibold text-zinc-700 mb-1">
                 Homepage Hero Headline
@@ -1430,6 +2064,42 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 value={settings.promoBannerText}
                 onChange={(e) => onSaveSettings({ ...settings, promoBannerText: e.target.value })}
                 className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                Footer Studio Address
+              </label>
+              <input
+                type="text"
+                value={settings.studioAddress}
+                onChange={(e) => onSaveSettings({ ...settings, studioAddress: e.target.value })}
+                className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                Footer Support Phone
+              </label>
+              <input
+                type="text"
+                value={settings.supportPhone}
+                onChange={(e) => onSaveSettings({ ...settings, supportPhone: e.target.value })}
+                className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                Footer Support Email
+              </label>
+              <input
+                type="text"
+                value={settings.supportEmail}
+                onChange={(e) => onSaveSettings({ ...settings, supportEmail: e.target.value })}
+                className="w-full px-3 py-2 text-xs border border-zinc-300 rounded-lg font-mono"
               />
             </div>
 
@@ -1558,6 +2228,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <button
               type="button"
               onClick={() => {
+                onSaveSettings({ ...settings });
                 try {
                   localStorage.setItem(
                     ADMIN_CREDS_STORAGE_KEY,

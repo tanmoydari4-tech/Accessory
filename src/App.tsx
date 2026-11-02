@@ -51,6 +51,18 @@ import {
   Home,
   Grid,
 } from 'lucide-react';
+import {
+  buildCatalogWithOverrides,
+  loadInitialCatalogSync,
+  loadInitialSettingsSync,
+  loadOverridesFromIndexedDB,
+  loadSettingsFromIndexedDB,
+  mergeRemoteStoreSettings,
+  persistAdminCatalogChanges,
+  persistAdminSettingsChanges,
+  registerRemoteProductOverrides,
+  sanitizeProductData,
+} from './utils/productStorage';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'pz_studio_products_v1',
@@ -61,114 +73,6 @@ const STORAGE_KEYS = {
   LEGACY_SHARED_CART: 'pz_studio_cart_v1',
   USER: 'pz_studio_user_v2',
 };
-
-interface StoredProductOverrides {
-  byId: Record<string, Product>;
-  deletedIds: string[];
-  updatedAt: number;
-}
-
-/**
- * Strips any `undefined` properties recursively so Firebase Firestore `setDoc`
- * never throws `Unsupported field value: undefined`.
- */
-function sanitizeForFirestore<T>(input: T): T {
-  return JSON.parse(JSON.stringify(input)) as T;
-}
-
-function loadStoredProductOverrides(): StoredProductOverrides {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PRODUCT_OVERRIDES);
-    if (!raw) return { byId: {}, deletedIds: [], updatedAt: 0 };
-    const parsed = JSON.parse(raw) as Partial<StoredProductOverrides>;
-    return {
-      byId: parsed.byId && typeof parsed.byId === 'object' ? parsed.byId : {},
-      deletedIds: Array.isArray(parsed.deletedIds) ? parsed.deletedIds : [],
-      updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
-    };
-  } catch {
-    return { byId: {}, deletedIds: [], updatedAt: 0 };
-  }
-}
-
-function saveStoredProductOverrides(nextProducts: Product[]): void {
-  try {
-    const initialMap = new Map(INITIAL_PRODUCTS.map((p) => [p.id, p]));
-    const nextIds = new Set(nextProducts.map((p) => p.id));
-    const deletedIds = INITIAL_PRODUCTS.filter((p) => !nextIds.has(p.id)).map((p) => p.id);
-    const byId: Record<string, Product> = {};
-
-    nextProducts.forEach((p) => {
-      const cleanProd = sanitizeForFirestore(p);
-      const base = initialMap.get(p.id);
-      if (
-        !base ||
-        (cleanProd.imageUrl || '') !== (base.imageUrl || '') ||
-        cleanProd.name !== base.name ||
-        cleanProd.basePrice !== base.basePrice ||
-        cleanProd.minOrderQty !== base.minOrderQty ||
-        cleanProd.inStock !== base.inStock
-      ) {
-        byId[p.id] = cleanProd;
-      }
-    });
-
-    const payload: StoredProductOverrides = {
-      byId,
-      deletedIds,
-      updatedAt: Date.now(),
-    };
-    localStorage.setItem(STORAGE_KEYS.PRODUCT_OVERRIDES, JSON.stringify(payload));
-  } catch {
-    // ignore storage quota errors
-  }
-}
-
-function mergeProductsWithOverrides(
-  baseList: Product[],
-  remoteOverridesById?: Record<string, Product>
-): Product[] {
-  const localOverrides = loadStoredProductOverrides();
-  const deletedSet = new Set(localOverrides.deletedIds);
-  // Local overrides take priority over remote snapshots so recent admin edits never revert
-  const combinedOverrides: Record<string, Product> = {
-    ...(remoteOverridesById || {}),
-    ...localOverrides.byId,
-  };
-
-  const seenIds = new Set<string>();
-  const merged: Product[] = [];
-
-  // 1. Prepend any newly created custom admin products first
-  Object.values(combinedOverrides).forEach((customProd) => {
-    const existsInBase = baseList.some((b) => b.id === customProd.id);
-    if (!existsInBase && !deletedSet.has(customProd.id)) {
-      seenIds.add(customProd.id);
-      merged.push(customProd);
-    }
-  });
-
-  // 2. Map base products and overlay any saved admin changes (like custom imageUrl)
-  baseList.forEach((item) => {
-    if (deletedSet.has(item.id) || seenIds.has(item.id)) return;
-    seenIds.add(item.id);
-    const override = combinedOverrides[item.id];
-    if (override) {
-      const nextItem: Product = {
-        ...item,
-        ...override,
-      };
-      if (!override.imageUrl) {
-        delete nextItem.imageUrl;
-      }
-      merged.push(nextItem);
-    } else {
-      merged.push(item);
-    }
-  });
-
-  return merged;
-}
 
 const getUserCartKey = (uid: string) => `pz_studio_user_cart_v3_${uid}`;
 
@@ -190,18 +94,8 @@ export default function App() {
   const [priceRangeFilter, setPriceRangeFilter] = useState<'all' | 'under-199' | '200-499' | '500-plus'>('all');
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState<boolean>(false);
 
-  // Core Persistent State
-  const [products, setProducts] = useState<Product[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-      const parsed: Product[] = saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
-      return mergeProductsWithOverrides(
-        Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_PRODUCTS
-      );
-    } catch {
-      return mergeProductsWithOverrides(INITIAL_PRODUCTS);
-    }
-  });
+  // Core Persistent State (Memory + IndexedDB + LocalStorage)
+  const [products, setProducts] = useState<Product[]>(() => loadInitialCatalogSync());
 
   const [orders, setOrders] = useState<Order[]>(() => {
     try {
@@ -221,14 +115,7 @@ export default function App() {
     }
   });
 
-  const [settings, setSettings] = useState<StoreSettings>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      return saved ? JSON.parse(saved) : INITIAL_STORE_SETTINGS;
-    } catch {
-      return INITIAL_STORE_SETTINGS;
-    }
-  });
+  const [settings, setSettings] = useState<StoreSettings>(() => loadInitialSettingsSync());
 
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
     try {
@@ -285,13 +172,28 @@ export default function App() {
     }
   });
 
-  // Persist to localStorage + keep selectedProduct & studioProduct synced with latest product photo/details
+  // Hydrate any large product photos or custom settings/logo stored in IndexedDB on mount
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
-    } catch {
-      // ignore quota error
-    }
+    let mounted = true;
+    loadOverridesFromIndexedDB().then((idbOverrides) => {
+      if (mounted && idbOverrides && Object.keys(idbOverrides.byId).length > 0) {
+        setProducts((prev) => buildCatalogWithOverrides(prev, idbOverrides));
+      }
+    });
+    loadSettingsFromIndexedDB().then((idbSettings) => {
+      if (mounted && idbSettings) {
+        setSettings((prev) =>
+          (idbSettings.updatedAt || 0) >= (prev.updatedAt || 0) ? idbSettings : prev
+        );
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Keep selectedProduct & studioProduct synced with latest product photo/details
+  useEffect(() => {
     setSelectedProduct((prev) => products.find((p) => p.id === prev.id) || prev);
     setStudioProduct((prev) => products.find((p) => p.id === prev.id) || prev);
   }, [products]);
@@ -418,7 +320,10 @@ export default function App() {
           doc(db, 'store', 'settings'),
           (snap) => {
             if (snap.exists()) {
-              setSettings(snap.data() as StoreSettings);
+              const mergedSettings = mergeRemoteStoreSettings(
+                snap.data() as Partial<StoreSettings>
+              );
+              setSettings(mergedSettings);
             }
           },
           () => {}
@@ -431,15 +336,7 @@ export default function App() {
             if (snap.exists()) {
               const data = snap.data() as { items?: Product[] };
               if (Array.isArray(data.items) && data.items.length > 0) {
-                setProducts((prev) => {
-                  const prevOverrides: Record<string, Product> = {};
-                  prev.forEach((p) => {
-                    if (p.imageUrl) {
-                      prevOverrides[p.id] = p;
-                    }
-                  });
-                  return mergeProductsWithOverrides(data.items!, prevOverrides);
-                });
+                setProducts(() => buildCatalogWithOverrides(data.items!));
               }
             }
           },
@@ -459,7 +356,8 @@ export default function App() {
                 }
               });
               if (Object.keys(remoteOverridesById).length > 0) {
-                setProducts((prev) => mergeProductsWithOverrides(prev, remoteOverridesById));
+                const mergedState = registerRemoteProductOverrides(remoteOverridesById);
+                setProducts((prev) => buildCatalogWithOverrides(prev, mergedState));
               }
             }
           },
@@ -911,6 +809,8 @@ export default function App() {
     .sort((a, b) => {
       if (priceSort === 'price-asc') return a.basePrice - b.basePrice;
       if (priceSort === 'price-desc') return b.basePrice - a.basePrice;
+      const customDiff = (b.imageUrl ? 1 : 0) - (a.imageUrl ? 1 : 0);
+      if (customDiff !== 0) return customDiff;
       return (b.featured ? 1 : 0) - (a.featured ? 1 : 0);
     });
 
@@ -923,7 +823,7 @@ export default function App() {
 
       {/* STRICT 3-ZONE TOP BAR CONTRACT */}
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-zinc-200 flex items-center justify-between gap-8 px-4 sm:px-8 py-4">
-        {/* Zone 1: Single text element wordmark */}
+        {/* Zone 1: Brand Wordmark / Logo */}
         <a
           href="#home"
           onClick={(e) => {
@@ -931,9 +831,16 @@ export default function App() {
             setSelectedCategoryFilter('all');
             navigateTo('home');
           }}
-          className="text-xl font-display font-extrabold tracking-tight text-zinc-950 whitespace-nowrap shrink-0"
+          className="inline-flex items-center gap-2.5 text-xl font-display font-extrabold tracking-tight text-zinc-950 whitespace-nowrap shrink-0"
         >
-          PrintZone
+          {settings.brandLogoUrl ? (
+            <img
+              src={settings.brandLogoUrl}
+              alt={settings.brandName || 'PrintZone'}
+              className="h-8 w-auto max-w-[110px] object-contain"
+            />
+          ) : null}
+          <span>{settings.brandName || 'PrintZone'}</span>
         </a>
 
         {/* Zone 2: 5 concise single-line text navigation links */}
@@ -949,7 +856,7 @@ export default function App() {
               activePage === 'all-products' ? 'text-blue-600 font-semibold' : ''
             }`}
           >
-            Shop All
+            {settings.navShopAllLabel || 'Shop All'}
           </a>
           <a
             href="#categories"
@@ -961,7 +868,7 @@ export default function App() {
               activePage === 'categories' ? 'text-blue-600 font-semibold' : ''
             }`}
           >
-            Categories
+            {settings.navCategoriesLabel || 'Categories'}
           </a>
           <a
             href="#sample-gallery"
@@ -973,7 +880,7 @@ export default function App() {
               activePage === 'sample-gallery' ? 'text-blue-600 font-semibold' : ''
             }`}
           >
-            Sample Designs
+            {settings.navSamplesLabel || 'Sample Designs'}
           </a>
           <a
             href="#design-studio"
@@ -985,7 +892,7 @@ export default function App() {
               activePage === 'design-studio' ? 'text-blue-600 font-semibold' : ''
             }`}
           >
-            Custom Studio
+            {settings.navStudioLabel || 'Custom Studio'}
           </a>
           <a
             href="#order-tracking"
@@ -997,7 +904,7 @@ export default function App() {
               activePage === 'order-tracking' ? 'text-blue-600 font-semibold' : ''
             }`}
           >
-            Track Order
+            {settings.navTrackOrderLabel || 'Track Order'}
           </a>
         </nav>
 
@@ -1028,7 +935,10 @@ export default function App() {
                   setActivePage('all-products');
                 }
               }}
-              placeholder="Search for custom T-shirts, photo mugs, tote bags, badges, calendars..."
+              placeholder={
+                settings.searchPlaceholder ||
+                'Search for custom T-shirts, photo mugs, tote bags, badges, calendars...'
+              }
               className="w-full pl-9 pr-3 py-2 text-xs bg-zinc-50 border border-zinc-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
@@ -1106,6 +1016,9 @@ export default function App() {
                   <ProductMockup
                     shape="tshirt"
                     color={products[0]?.colors[0] || { name: 'Blue', hex: '#2563EB' }}
+                    productImageUrl={
+                      products.find((p) => p.imageUrl)?.imageUrl || products[0]?.imageUrl
+                    }
                     graphicText="ALL"
                     className="w-full h-full"
                   />
@@ -1114,7 +1027,10 @@ export default function App() {
               </button>
 
               {CATEGORIES.map((cat) => {
-                const rep = products.find((p) => p.categoryId === cat.id) || products[0];
+                const rep =
+                  products.find((p) => p.categoryId === cat.id && p.imageUrl) ||
+                  products.find((p) => p.categoryId === cat.id) ||
+                  products[0];
                 const isSelected = selectedCategoryFilter === cat.id;
                 return (
                   <button
@@ -1136,6 +1052,7 @@ export default function App() {
                       <ProductMockup
                         shape={cat.highlightShape}
                         color={rep.colors[0]}
+                        productImageUrl={rep.imageUrl}
                         className="w-full h-full"
                       />
                     </div>
@@ -1163,10 +1080,12 @@ export default function App() {
                     Custom Printing Online Store · Free Shipping Above ₹{settings.freeDeliveryThreshold}
                   </div>
                   <h1 className="text-2xl sm:text-4xl font-display font-extrabold tracking-tight leading-tight">
-                    Shop Custom Printed T-Shirts, Mugs, Tote Bags, Badges & Personalized Gifts
+                    {settings.heroTitle ||
+                      'Shop Custom Printed T-Shirts, Mugs, Tote Bags, Badges & Personalized Gifts'}
                   </h1>
                   <p className="text-xs sm:text-sm text-zinc-300 max-w-2xl leading-relaxed">
-                    Select your size & color, click <strong>Add to Cart</strong> or <strong>Buy Now</strong> for instant checkout, or click <strong>Customize</strong> on any item to add your own photo, logo, or name.
+                    {settings.heroSubtitle ||
+                      'Select your size & color, click Add to Cart or Buy Now for instant checkout, or click Customize on any item to add your own photo, logo, or name.'}
                   </p>
                   <div className="flex flex-wrap items-center gap-3 pt-1">
                     <button
@@ -1200,7 +1119,10 @@ export default function App() {
 
                 {/* Right 5 Cols: Quick Deal Spotlight Cards */}
                 <div className="lg:col-span-5 grid grid-cols-2 gap-3">
-                  {products.slice(0, 2).map((dealProd) => (
+                  {[...products]
+                    .sort((a, b) => (b.imageUrl ? 1 : 0) - (a.imageUrl ? 1 : 0))
+                    .slice(0, 2)
+                    .map((dealProd) => (
                     <div
                       key={dealProd.id}
                       className="bg-zinc-900 border border-zinc-800 rounded-xl p-3.5 flex flex-col justify-between"
@@ -1364,7 +1286,9 @@ export default function App() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 {CATEGORIES.map((cat) => {
                   const repProd =
-                    products.find((p) => p.categoryId === cat.id) || products[0];
+                    products.find((p) => p.categoryId === cat.id && p.imageUrl) ||
+                    products.find((p) => p.categoryId === cat.id) ||
+                    products[0];
                   return (
                     <div
                       key={cat.id}
@@ -1389,6 +1313,7 @@ export default function App() {
                         <ProductMockup
                           shape={cat.highlightShape}
                           color={repProd.colors[0]}
+                          productImageUrl={repProd.imageUrl}
                           className="w-full h-full"
                         />
                       </div>
@@ -1687,22 +1612,16 @@ export default function App() {
             onAdminLogout={handleLogout}
             products={products}
             onSaveProducts={(nextProducts) => {
-              const cleanProducts = sanitizeForFirestore(nextProducts);
-              saveStoredProductOverrides(cleanProducts);
-              try {
-                localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(cleanProducts));
-              } catch {
-                // ignore
-              }
+              const cleanProducts = sanitizeProductData(nextProducts);
+              const overridesState = persistAdminCatalogChanges(cleanProducts);
               setProducts(cleanProducts);
 
               if (db) {
                 // 1. Save each modified/custom product into its own Firestore document so base64 images never hit the 1MB single-doc limit
-                const overrides = loadStoredProductOverrides();
-                Object.values(overrides.byId).forEach((prod) => {
+                Object.values(overridesState.byId).forEach((prod) => {
                   setDoc(
                     doc(db, 'product_overrides', prod.id),
-                    sanitizeForFirestore(prod)
+                    sanitizeProductData(prod)
                   ).catch(() => {});
                 });
                 // 2. Also sync the catalog document (keep under 750KB so Firestore 1MB limit never rejects & rolls back)
@@ -1720,7 +1639,7 @@ export default function App() {
                     : cleanProducts;
                 setDoc(
                   doc(db, 'store', 'catalog'),
-                  sanitizeForFirestore({ items: catalogItemsForFirestore })
+                  sanitizeProductData({ items: catalogItemsForFirestore })
                 ).catch(() => {});
               }
             }}
@@ -1728,7 +1647,7 @@ export default function App() {
             onUpdateOrderStatus={handleUpdateOrderStatus}
             sampleDesigns={sampleDesigns}
             onSaveSampleDesigns={(nextSamples) => {
-              const cleanSamples = sanitizeForFirestore(nextSamples);
+              const cleanSamples = sanitizeProductData(nextSamples);
               setSampleDesigns(cleanSamples);
               if (db) {
                 setDoc(doc(db, 'store', 'samples'), { items: cleanSamples }).catch(() => {});
@@ -1736,10 +1655,10 @@ export default function App() {
             }}
             settings={settings}
             onSaveSettings={(nextSettings) => {
-              const cleanSettings = sanitizeForFirestore(nextSettings);
-              setSettings(cleanSettings);
+              const savedSettings = persistAdminSettingsChanges(nextSettings);
+              setSettings(savedSettings);
               if (db) {
-                setDoc(doc(db, 'store', 'settings'), cleanSettings).catch(() => {});
+                setDoc(doc(db, 'store', 'settings'), savedSettings).catch(() => {});
               }
             }}
           />
@@ -1864,10 +1783,11 @@ export default function App() {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-10 border-b border-zinc-800">
             <div>
               <h3 className="text-lg font-display font-bold text-white">
-                Subscribe to PrintZone Studio Dispatch
+                {settings.newsletterTitle || 'Subscribe to PrintZone Studio Dispatch'}
               </h3>
               <p className="text-xs text-zinc-400 mt-1">
-                Receive seasonal template drops, corporate gifting lookbooks, and bulk print offers.
+                {settings.newsletterSubtitle ||
+                  'Receive seasonal template drops, corporate gifting lookbooks, and bulk print offers.'}
               </p>
             </div>
 
@@ -1902,7 +1822,7 @@ export default function App() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-xs">
             <div className="space-y-2.5">
               <div className="font-display font-bold text-white text-sm">
-                PrintZone – Custom Printing Studio
+                {settings.footerBrandTitle || 'PrintZone – Custom Printing Studio'}
               </div>
               <p className="text-zinc-400 leading-relaxed">{settings.studioAddress}</p>
               <div className="font-mono text-zinc-300">{settings.supportPhone}</div>
@@ -1911,7 +1831,7 @@ export default function App() {
 
             <div className="space-y-2">
               <div className="font-semibold text-white uppercase tracking-wider text-[11px] font-mono">
-                Catalog & Studio
+                {settings.footerCol1Title || 'Catalog & Studio'}
               </div>
               <ul className="space-y-1.5">
                 <li>
@@ -1921,7 +1841,7 @@ export default function App() {
                 </li>
                 <li>
                   <button onClick={() => navigateTo('all-products')} className="hover:text-white cursor-pointer">
-                    2. All Products (46 SKUs)
+                    2. All Products ({products.length} SKUs)
                   </button>
                 </li>
                 <li>
@@ -1954,7 +1874,7 @@ export default function App() {
 
             <div className="space-y-2">
               <div className="font-semibold text-white uppercase tracking-wider text-[11px] font-mono">
-                Customer & Operations
+                {settings.footerCol2Title || 'Customer & Operations'}
               </div>
               <ul className="space-y-1.5">
                 <li>
@@ -1992,7 +1912,7 @@ export default function App() {
 
             <div className="space-y-2">
               <div className="font-semibold text-white uppercase tracking-wider text-[11px] font-mono">
-                Company & Policies
+                {settings.footerCol3Title || 'Company & Policies'}
               </div>
               <ul className="space-y-1.5">
                 <li>
@@ -2036,10 +1956,12 @@ export default function App() {
 
           <div className="pt-8 border-t border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs text-zinc-500">
             <div>
-              © {new Date().getFullYear()} PrintZone – Custom Printing Studio. All rights reserved.
+              {settings.footerCopyrightText ||
+                `© ${new Date().getFullYear()} PrintZone – Custom Printing Studio. All rights reserved.`}
             </div>
             <div className="font-mono text-zinc-400">
-              Custom Printing & Personalized Gifts across India
+              {settings.footerBottomTagline ||
+                'Custom Printing & Personalized Gifts across India'}
             </div>
           </div>
         </div>
